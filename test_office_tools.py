@@ -253,5 +253,88 @@ class ExcelToolTests(unittest.TestCase):
         self.assertIn("[错误]", bad_cell)
 
 
+from pptx import Presentation
+from pptx.util import Pt
+
+from office_tools import edit_pptx, read_pptx, write_pptx
+
+
+class PptToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = _WORKSPACE / f".test_office_pptx_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _make_pptx(self) -> Path:
+        target = self.root / "deck.pptx"
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        slide.shapes.title.text = "项目汇报"
+        body = slide.placeholders[1]
+        body.text = "本周进展"
+        paragraph = body.text_frame.add_paragraph()
+        paragraph.text = "- 完成接口开发"
+        paragraph.font.size = Pt(24)
+        presentation.save(target)
+        return target
+
+    def test_read_pptx_shows_slide_text(self) -> None:
+        target = self._make_pptx()
+        result = read_pptx.invoke({"path": str(target)})
+
+        self.assertIn("[幻灯片 1]", result)
+        self.assertIn("标题: 项目汇报", result)
+        self.assertIn("完成接口开发", result)
+
+    def test_write_pptx_from_markdown(self) -> None:
+        target = self.root / "new.pptx"
+        content = "# 第一页\n- 要点一\n- 要点二\n\n---\n\n# 第二页\n- 要点三\n"
+
+        result = write_pptx.invoke({"path": str(target), "content": content})
+        read = read_pptx.invoke({"path": str(target)})
+
+        self.assertIn("[新建]", result)
+        self.assertIn("[幻灯片 1]", read)
+        self.assertIn("[幻灯片 2]", read)
+        self.assertIn("第一页", read)
+
+    def test_edit_pptx_preserves_font_size_and_backup(self) -> None:
+        target = self._make_pptx()
+
+        result = edit_pptx.invoke(
+            {
+                "path": str(target),
+                "slide": 1,
+                "old_text": "完成接口开发",
+                "new_text": "完成联调",
+            }
+        )
+
+        self.assertIn("[修改]", result)
+        self.assertTrue((self.root / "deck.pptx.bak").exists())
+        presentation = Presentation(target)
+        slide = presentation.slides[0]
+        texts = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for paragraph in shape.text_frame.paragraphs:
+                    texts.append(paragraph.text)
+        self.assertIn("完成联调", "\n".join(texts))
+
+    def test_edit_pptx_rejects_bad_slide(self) -> None:
+        target = self._make_pptx()
+        result = edit_pptx.invoke(
+            {
+                "path": str(target),
+                "slide": 9,
+                "old_text": "x",
+                "new_text": "y",
+            }
+        )
+        self.assertIn("[错误]", result)
+
+
 if __name__ == "__main__":
     unittest.main()

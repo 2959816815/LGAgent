@@ -586,3 +586,239 @@ def edit_xlsx(path: str, sheet: str, cell: str, value: str) -> str:
     result = _write_office_target(target, buffer.getvalue())
     result = result.replace("[写入]", "[修改]")
     return result
+
+
+def _pptx_text_shapes(slide: Any) -> Iterator[Any]:
+    """Yield text shapes and table-cell paragraphs of a slide (title excluded)."""
+    title = slide.shapes.title
+    for shape in slide.shapes:
+        if shape is title:
+            continue
+        if getattr(shape, "has_text_frame", False):
+            yield shape
+        if getattr(shape, "has_table", False):
+            for row in shape.table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.text_frame.paragraphs:
+                        yield paragraph
+
+
+def _replace_in_pptx_paragraph(
+    paragraph: Any,
+    old_text: str,
+    new_text: str,
+    replace_all: bool,
+) -> tuple[int, bool]:
+    """Replace text inside one paragraph; returns (count, rebuilt_flag)."""
+    if old_text not in paragraph.text:
+        return 0, False
+
+    replaced = 0
+    for run in paragraph.runs:
+        if old_text not in run.text:
+            continue
+        if replace_all:
+            count = run.text.count(old_text)
+            run.text = run.text.replace(old_text, new_text)
+            replaced += count
+        else:
+            run.text = run.text.replace(old_text, new_text, 1)
+            replaced += 1
+            break
+    if replaced:
+        return replaced, False
+
+    original = paragraph.text
+    updated = original.replace(old_text, new_text, -1 if replace_all else 1)
+    count = original.count(old_text)
+    if paragraph.runs:
+        first = paragraph.runs[0]
+        for run in paragraph.runs[1:]:
+            run._r.getparent().remove(run._r)
+        first.text = updated
+    else:
+        paragraph.text = updated
+    return count if replace_all else 1, True
+
+
+@tool
+def read_pptx(path: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
+    """读取 .pptx 的幻灯片标题、文本框和表格文字。"""
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+    error = _validate_existing(target, ".pptx")
+    if error:
+        return error
+
+    limit = _coerce_max_chars(max_chars)
+    try:
+        presentation = Presentation(str(target))
+    except Exception as exc:
+        return f"[错误] 打开 PPT 失败: {target} ({exc})"
+
+    lines = [f"[演示文稿] {target}"]
+    for slide_index, slide in enumerate(presentation.slides, 1):
+        header = f"[幻灯片 {slide_index}]"
+        title_shape = slide.shapes.title
+        if title_shape is not None and title_shape.has_text_frame:
+            title = title_shape.text_frame.text.strip()
+            if title:
+                header += f" 标题: {title}"
+        lines.append(header)
+        for shape in slide.shapes:
+            if shape is title_shape:
+                continue
+            if getattr(shape, "has_text_frame", False):
+                text = shape.text_frame.text.strip()
+                if text:
+                    lines.append(f"  文本框: {text.replace(chr(10), ' / ')}")
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    cells = [cell.text.replace("\n", " ").strip() for cell in row.cells]
+                    lines.append("  表格行: " + " | ".join(cells))
+    return _truncate("\n".join(lines), limit)
+
+
+@tool
+def write_pptx(path: str, content: str) -> str:
+    """用 Markdown 新建或整体覆盖 .pptx；用单独一行 --- 分页。"""
+    if not isinstance(content, str):
+        return "[错误] content 必须是字符串。"
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+    error = _validate_write_target(target, ".pptx")
+    if error:
+        return error
+    if len(content.encode("utf-8")) > _MAX_WRITE_BYTES:
+        return f"[错误] 内容过大，上限 {_MAX_WRITE_BYTES} 字节"
+
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in content.splitlines():
+        if line.strip() == "---":
+            if current:
+                blocks.append(current)
+            current = []
+        else:
+            current.append(line)
+    if current:
+        blocks.append(current)
+    blocks = [block for block in blocks if any(line.strip() for line in block)]
+    if not blocks:
+        return "[错误] content 为空，无法生成 PPT"
+
+    try:
+        presentation = Presentation()
+        for block in blocks:
+            title = ""
+            body = block
+            if block and block[0].strip().startswith("# "):
+                title = block[0].strip()[2:].strip()
+                body = block[1:]
+            slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+            slide.shapes.title.text = title
+            text_frame = slide.placeholders[1].text_frame
+            text_frame.clear()
+            first = True
+            for line in body:
+                text = line.strip()
+                if not text:
+                    continue
+                paragraph = text_frame.paragraphs[0] if first else text_frame.add_paragraph()
+                first = False
+                paragraph.text = text[2:].strip() if text.startswith("- ") else text
+        buffer = io.BytesIO()
+        presentation.save(buffer)
+    except Exception as exc:
+        return f"[错误] 生成 PPT 失败: {exc}"
+
+    return _write_office_target(target, buffer.getvalue())
+
+
+@tool
+def edit_pptx(
+    path: str,
+    slide: int,
+    old_text: str,
+    new_text: str,
+    replace_all: bool = False,
+) -> str:
+    """在 .pptx 指定页（从 1 开始）替换文字。"""
+    if not isinstance(old_text, str) or not isinstance(new_text, str):
+        return "[错误] old_text 和 new_text 必须是字符串。"
+    if not old_text:
+        return "[错误] old_text 不能为空。"
+
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+    error = _validate_existing(target, ".pptx")
+    if error:
+        return error
+
+    try:
+        slide_number = int(slide)
+    except (TypeError, ValueError):
+        return f"[错误] slide 必须是整数: {slide!r}"
+
+    try:
+        presentation = Presentation(str(target))
+    except Exception as exc:
+        return f"[错误] 打开 PPT 失败: {target} ({exc})"
+
+    if slide_number < 1 or slide_number > len(presentation.slides):
+        return f"[错误] 幻灯片页码越界: {slide_number}"
+
+    slide_obj = presentation.slides[slide_number - 1]
+    paragraphs = []
+    title_shape = slide_obj.shapes.title
+    if title_shape is not None and title_shape.has_text_frame:
+        paragraphs.extend(title_shape.text_frame.paragraphs)
+    for shape in slide_obj.shapes:
+        if shape is title_shape:
+            continue
+        if getattr(shape, "has_text_frame", False):
+            paragraphs.extend(shape.text_frame.paragraphs)
+        if getattr(shape, "has_table", False):
+            for row in shape.table.rows:
+                for cell in row.cells:
+                    paragraphs.extend(cell.text_frame.paragraphs)
+
+    total = sum(paragraph.text.count(old_text) for paragraph in paragraphs)
+    if total == 0:
+        return f"[错误] 未找到 old_text: {target}"
+    if total > 1 and not replace_all:
+        return (
+            f"[错误] old_text 出现 {total} 次，请提供更长的唯一片段，"
+            "或设置 replace_all=true。"
+        )
+
+    replaced = 0
+    warnings = 0
+    for paragraph in paragraphs:
+        if old_text not in paragraph.text:
+            continue
+        if not replace_all and replaced:
+            break
+        count, rebuilt = _replace_in_pptx_paragraph(
+            paragraph, old_text, new_text, replace_all
+        )
+        replaced += count
+        warnings += int(rebuilt)
+
+    try:
+        buffer = io.BytesIO()
+        presentation.save(buffer)
+    except Exception as exc:
+        return f"[错误] 生成 PPT 失败: {target} ({exc})"
+
+    result = _write_office_target(target, buffer.getvalue())
+    result = result.replace("[写入]", "[修改]")
+    if warnings:
+        result += f"\n[提示] {warnings} 处跨格式片段已按段落样式重建"
+    return result
