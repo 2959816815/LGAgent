@@ -120,6 +120,25 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertEqual(result, "[错误] 搜索返回格式异常。")
 
     @patch("web_search_tool.requests.post")
+    def test_truncates_long_snippet(self, post):
+        post.return_value = self._response(
+            {
+                "results": [
+                    {
+                        "title": "长文",
+                        "url": "https://example.com/long",
+                        "content": "长" * 500,
+                    }
+                ]
+            }
+        )
+
+        result = web_search.invoke({"query": "长文"})
+
+        self.assertIn("…", result)
+        self.assertLessEqual(len(result), 400)
+
+    @patch("web_search_tool.requests.post")
     def test_empty_query(self, post):
         result = web_search.invoke({"query": "   "})
 

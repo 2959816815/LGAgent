@@ -12,6 +12,7 @@ _DEFAULT_MAX_RESULTS = 5
 _MAX_MAX_RESULTS = 10
 _TIMEOUT_SECONDS = 15
 _MAX_QUERY_CHARS = 500
+_MAX_SNIPPET_CHARS = 300
 
 
 def _coerce_max_results(value) -> int:
@@ -87,6 +88,8 @@ def web_search(query: str, max_results: int = 5) -> str:
         snippet = " ".join(str(item.get("content") or "").split())
         if not snippet:
             snippet = "(无摘要)"
+        elif len(snippet) > _MAX_SNIPPET_CHARS:
+            snippet = snippet[: _MAX_SNIPPET_CHARS].rstrip() + "…"
         lines.extend(
             [
                 f"{index}. {title}",
