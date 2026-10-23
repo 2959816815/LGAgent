@@ -7,12 +7,15 @@ r"""graph_agent.py — 一个最小可用的 LangGraph Agent。
 
 读取文件示例（启动后在终端输入）：
     你: 读取 D:\...\notes.md 并总结
+    你: 从 D:\...\big.log 的第 20001 个字符开始读 20000 字
+    你: 分析 D:\...\data.csv 和 D:\...\config.json
 
 写入/修改文件示例：
     你: 把 D:\...\notes.md 里的“旧内容”改成“新内容”
-    你: 新建 D:\...\todo.md，写上今天的三件事
+    你: 新建 D:\...\todo.md，写上今天的三件事，父目录不存在就创建
 
-写入和局部修改都会先在原文件旁生成 .bak 备份；只支持文本文件，单个文件上限 5MB。
+写入和局部修改都会先在原文件旁生成 .bak 备份；只支持文本文件，单次写入上限 5MB。
+读取文本文件最多加载 20MB，可通过 offset/max_chars 分页返回。
 
 如需切回 DeepSeek，设置环境变量 LLM_PROVIDER=deepseek 即可：
     $env:LLM_PROVIDER="deepseek"; python graph_agent.py
@@ -24,6 +27,9 @@ r"""graph_agent.py — 一个最小可用的 LangGraph Agent。
 from __future__ import annotations
 
 import codecs
+import csv
+import io
+import json
 import os
 import shutil
 import stat
@@ -57,7 +63,10 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 SYSTEM_PROMPT = (
     "你是一个简洁、可靠的中文助手。需要实时信息时请调用工具，不要编造。"
-    "读取文件或目录用 read_file；文本文件新建/覆盖用 write_file，局部修改用 edit_file。"
+    "读取文件或目录用 read_file，大文件可用 offset/max_chars 分页；"
+    "CSV 用 read_csv，JSON 用 read_json。"
+    "文本文件新建/覆盖用 write_file，可用 create_parents 创建父目录、encoding 指定编码；"
+    "局部修改用 edit_file。"
     "Word 用 read_docx/write_docx/edit_docx；Excel 用 read_xlsx/write_xlsx/edit_xlsx；"
     "PPT 用 read_pptx/write_pptx/edit_pptx；PDF 只读用 read_pdf。"
     "修改已有办公文件前先用对应的 read_* 工具确认原文；"
@@ -66,11 +75,24 @@ SYSTEM_PROMPT = (
 )
 
 # 文件读取的安全上限
-_MAX_READ_BYTES = 1_000_000
+# 允许分页读取较大的文本文件；单次返回仍受 max_chars 限制。
+_MAX_READ_BYTES = 20_000_000
 _MAX_DIR_ENTRIES = 200
 _DEFAULT_MAX_CHARS = 20_000
 _MIN_MAX_CHARS = 100
 _MAX_MAX_CHARS = 50_000
+_MAX_STRUCTURED_ROWS = 200
+_MAX_STRUCTURED_CELL_CHARS = 200
+
+# write_file 支持的编码；限制在白名单内，避免写出带 NUL 的 UTF-16 等格式。
+_WRITE_ENCODINGS = {
+    "utf-8": "utf-8",
+    "utf8": "utf-8",
+    "utf-8-sig": "utf-8-sig",
+    "utf8-sig": "utf-8-sig",
+    "gb18030": "gb18030",
+    "gbk": "gbk",
+}
 
 # 文件写入/编辑的安全上限
 _MAX_WRITE_BYTES = 5_000_000
@@ -88,6 +110,35 @@ def _coerce_max_chars(value: int) -> int:
     return max(_MIN_MAX_CHARS, min(number, _MAX_MAX_CHARS))
 
 
+def _coerce_offset(value: int) -> int:
+    """把分页起点限制为非负整数。"""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, number)
+
+
+def _coerce_max_rows(value: int) -> int:
+    """把 CSV 最大行数限制在安全范围内。"""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = 20
+    return max(1, min(number, _MAX_STRUCTURED_ROWS))
+
+
+def _normalize_write_encoding(value: str) -> str:
+    """把 write_file 的 encoding 参数规范化为白名单编码名。"""
+    key = str(value or "utf-8").strip().lower().replace("_", "-")
+    if key not in _WRITE_ENCODINGS:
+        raise ValueError(
+            "不支持的编码 "
+            f"{value!r}；支持 utf-8、utf-8-sig、gb18030、gbk。"
+        )
+    return _WRITE_ENCODINGS[key]
+
+
 def _decode(raw: bytes) -> str:
     """按常见中文编码依次尝试解码。"""
     for encoding in ("utf-8-sig", "gb18030"):
@@ -98,34 +149,56 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _read_text_file(path: Path, max_chars: int) -> str:
-    """读取一个文本文件，返回带元信息的内容字符串。"""
-    limit = _coerce_max_chars(max_chars)
+def _load_text_file(path: Path) -> tuple[str, int, int]:
+    """读取文本文件，返回 (文本, 文件总字节数, 实际读取字节数)。"""
     size = path.stat().st_size
-
     with path.open("rb") as handle:
         raw = handle.read(_MAX_READ_BYTES)
 
-    if b"\x00" in raw[:8192]:
-        return f"[错误] 这是二进制文件，暂不支持读取: {path}"
+    if b"\x00" in raw[:_MAX_BINARY_CHECK_BYTES]:
+        raise ValueError(f"这是二进制文件，暂不支持读取: {path}")
 
-    text = _decode(raw)
-    truncated_bytes = size > len(raw)
-    truncated_chars = len(text) > limit
-    if truncated_chars:
-        text = text[:limit]
+    return _decode(raw), size, len(raw)
+
+
+def _read_text_file(path: Path, max_chars: int, offset: int = 0) -> str:
+    """分段读取一个文本文件，返回带元信息和分页提示的内容字符串。"""
+    limit = _coerce_max_chars(max_chars)
+    start_offset = _coerce_offset(offset)
+
+    try:
+        text, size, raw_len = _load_text_file(path)
+    except ValueError as exc:
+        return f"[错误] {exc}"
+
+    total = len(text)
+    start = min(start_offset, total)
+    end = min(start + limit, total)
+    page = text[start:end]
 
     notes = []
-    if truncated_bytes:
-        notes.append(f"文件共 {size} 字节，只读取了前 {len(raw)} 字节")
-    if truncated_chars:
-        notes.append(f"内容超过 {limit} 字符，已截断")
+    if size > raw_len:
+        notes.append(f"文件共 {size} 字节，只读取了前 {raw_len} 字节")
+
+    if total > 0:
+        if start >= total:
+            notes.append("已到文件末尾")
+        else:
+            if start > 0:
+                notes.append(f"从第 {start + 1} 字符开始")
+            if end < total:
+                notes.append(f"内容超过 {limit} 字符，已截断")
+                notes.append(f"共 {total} 字符，可用 offset={end} 继续")
+            elif start > 0:
+                notes.append(f"共 {total} 字符")
 
     header = f"[文件] {path} ({size} 字节)"
     if notes:
         header += " | " + "；".join(notes)
 
-    return f"{header}\n{text}" if text else f"{header}\n(空文件)"
+    if page:
+        return f"{header}\n{page}"
+    return f"{header}\n(空文件)" if total == 0 else f"{header}\n(已到文件末尾)"
 
 
 def _list_directory(path: Path) -> str:
@@ -155,6 +228,171 @@ def _list_directory(path: Path) -> str:
     if not lines:
         return f"{header}\n(空目录)"
     return header + "\n" + "\n".join(lines)
+
+
+def _load_structured_text(raw_path: str) -> tuple[Path | None, str, str | None]:
+    """为结构化读取工具定位并读取文本文件。"""
+    try:
+        target = _resolve_path(raw_path)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return None, "", f"[错误] 路径无效: {raw_path!r} ({exc})"
+
+    if not target.exists():
+        return target, "", f"[错误] 文件不存在: {target}"
+    if target.is_dir():
+        return target, "", f"[错误] 目标是目录，请用 read_file: {target}"
+    if not target.is_file():
+        return target, "", f"[错误] 不是普通文件: {target}"
+
+    try:
+        text, _, _ = _load_text_file(target)
+    except ValueError as exc:
+        return target, "", f"[错误] {exc}"
+    except OSError as exc:
+        return target, "", f"[错误] 读取失败: {target} ({exc})"
+
+    return target, text, None
+
+
+def _json_type(value: object) -> str:
+    """返回 JSON 值的简短类型名，容器附带长度。"""
+    if isinstance(value, dict):
+        return f"object({len(value)})"
+    if isinstance(value, list):
+        return f"array({len(value)})"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if value is None:
+        return "null"
+    return type(value).__name__
+
+
+def _clip_cell(value: object) -> str:
+    """把单元格压成单行，避免一个超长字段撑爆输出。"""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    if len(text) > _MAX_STRUCTURED_CELL_CHARS:
+        return text[:_MAX_STRUCTURED_CELL_CHARS] + "…"
+    return text
+
+
+@tool
+def read_csv(path: str, max_rows: int = 20) -> str:
+    """结构化读取 CSV：显示列名、分隔符和前若干行数据。
+
+    max_rows 默认 20，最多 200。只做只读摘要，不修改文件。
+    """
+    target, text, error = _load_structured_text(path)
+    if error is not None:
+        return error
+    if not text.strip():
+        return f"[CSV] {target} (空文件)"
+
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+
+    try:
+        rows = [
+            row
+            for row in csv.reader(io.StringIO(text), dialect)
+            if row
+        ]
+    except csv.Error as exc:
+        return f"[错误] CSV 解析失败: {target} ({exc})"
+
+    if not rows:
+        return f"[CSV] {target} (空文件)"
+
+    header = rows[0]
+    data = rows[1:]
+    limit = _coerce_max_rows(max_rows)
+    shown = data[:limit]
+    width = max([len(header)] + [len(row) for row in data])
+
+    delimiter_name = {
+        ",": "逗号",
+        ";": "分号",
+        "\t": "制表符",
+        "|": "竖线",
+    }.get(dialect.delimiter, repr(dialect.delimiter))
+
+    lines = [
+        f"[CSV] {target} (数据行 {len(data)}, 列数 {len(header)}, "
+        f"分隔符 {delimiter_name})",
+        "[列] " + " | ".join(
+            _clip_cell(header[index] if index < len(header) else "")
+            for index in range(width)
+        ),
+    ]
+    for row_number, row in enumerate(shown, start=1):
+        cells = [
+            _clip_cell(row[index] if index < len(row) else "")
+            for index in range(width)
+        ]
+        lines.append(f"[行 {row_number}] " + " | ".join(cells))
+
+    if len(data) > len(shown):
+        lines.append(
+            f"[提示] 仅显示前 {len(shown)} 行（共 {len(data)} 行）；"
+            f"可调 max_rows（最多 {_MAX_STRUCTURED_ROWS}）"
+        )
+
+    return "\n".join(lines)
+
+
+@tool
+def read_json(path: str, max_chars: int = 20000) -> str:
+    """结构化读取 JSON：显示顶层类型、键/数组摘要和格式化内容。"""
+    target, text, error = _load_structured_text(path)
+    if error is not None:
+        return error
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return (
+            f"[错误] JSON 解析失败: {target} "
+            f"（第 {exc.lineno} 行第 {exc.colno} 列：{exc.msg}）"
+        )
+
+    kind = _json_type(data).split("(", 1)[0]
+    summary = []
+    if isinstance(data, dict):
+        summary.append(f"[键] {len(data)} 个")
+        for key, value in data.items():
+            summary.append(f"[字段] {key}: {_json_type(value)}")
+    elif isinstance(data, list):
+        summary.append(f"[数组] 长度 {len(data)}")
+        if data:
+            types = sorted({_json_type(value) for value in data})
+            summary.append("[元素类型] " + ", ".join(types))
+    else:
+        summary.append(f"[值类型] {_json_type(data)}")
+
+    pretty = json.dumps(data, ensure_ascii=False, indent=2)
+    limit = _coerce_max_chars(max_chars)
+    truncated = len(pretty) > limit
+    shown = pretty[:limit] if truncated else pretty
+
+    lines = [
+        f"[JSON] {target} (类型 {kind}, {len(text)} 字符)",
+        *summary,
+    ]
+    if truncated:
+        lines.append(
+            f"[提示] 内容超过 {limit} 字符，已截断；"
+            f"可调 max_chars（最多 {_MAX_MAX_CHARS}）"
+        )
+    lines.append(shown)
+    return "\n".join(lines)
 
 
 def _resolve_path(raw_path: str) -> Path:
@@ -233,10 +471,11 @@ def get_current_time() -> str:
 
 
 @tool
-def read_file(path: str, max_chars: int = 20000) -> str:
+def read_file(path: str, max_chars: int = 20000, offset: int = 0) -> str:
     """读取文本文件并返回内容；如果 path 是目录，则返回目录中的文件和子目录列表。
 
     支持绝对路径、相对路径、~ 和环境变量。只支持文本文件。
+    大文件可用 offset（起始字符位置，从 0 开始）和 max_chars 分页读取。
     """
     raw_path = (path or "").strip().strip('"').strip("'")
     if not raw_path:
@@ -255,7 +494,7 @@ def read_file(path: str, max_chars: int = 20000) -> str:
             return _list_directory(target)
         if not target.is_file():
             return f"[错误] 不是普通文件或目录: {target}"
-        return _read_text_file(target, max_chars)
+        return _read_text_file(target, max_chars, offset)
     except PermissionError:
         return f"[错误] 没有权限访问: {target}"
     except OSError as exc:
@@ -263,12 +502,18 @@ def read_file(path: str, max_chars: int = 20000) -> str:
 
 
 @tool
-def write_file(path: str, content: str) -> str:
+def write_file(
+    path: str,
+    content: str,
+    create_parents: bool = False,
+    encoding: str = "utf-8",
+) -> str:
     """新建或整体覆盖一个文本文件。
 
     新建或整体重写用本工具；局部修改请先用 read_file 读取，
-    再用 edit_file。只支持文本文件；父目录必须已存在；
-    已有文件会先自动备份为 .bak。
+    再用 edit_file。只支持文本文件；默认要求父目录已存在，
+    create_parents=True 时自动创建；encoding 支持 utf-8、utf-8-sig、
+    gb18030、gbk；已有文件会先自动备份为 .bak。
     """
     if not isinstance(content, str):
         return "[错误] content 必须是字符串。"
@@ -278,17 +523,29 @@ def write_file(path: str, content: str) -> str:
     except (OSError, ValueError, RuntimeError) as exc:
         return f"[错误] 路径无效: {path!r} ({exc})"
 
+    try:
+        codec = _normalize_write_encoding(encoding)
+    except ValueError as exc:
+        return f"[错误] {exc}"
+
     parent = target.parent
-    if not parent.exists() or not parent.is_dir():
-        return f"[错误] 父目录不存在: {parent}"
+    if not parent.exists():
+        if not create_parents:
+            return f"[错误] 父目录不存在: {parent}"
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return f"[错误] 创建父目录失败: {parent} ({exc})"
+    if not parent.is_dir():
+        return f"[错误] 父目录不是目录: {parent}"
 
     if target.exists() and target.is_dir():
         return f"[错误] 目标是目录: {target}"
 
     try:
-        data = content.encode("utf-8")
+        data = content.encode(codec)
     except UnicodeEncodeError as exc:
-        return f"[错误] 内容无法编码为 UTF-8: {exc}"
+        return f"[错误] 内容无法编码为 {codec}: {exc}"
 
     if len(data) > _MAX_WRITE_BYTES:
         return f"[错误] 内容过大: {len(data)} 字节，上限 {_MAX_WRITE_BYTES} 字节"
@@ -319,7 +576,7 @@ def write_file(path: str, content: str) -> str:
         return f"[错误] 写入失败: {target} ({exc})"
 
     action = "[写入]" if existed else "[新建]"
-    lines = [f"{action} {target} ({len(data)} 字节, UTF-8)"]
+    lines = [f"{action} {target} ({len(data)} 字节, {codec.upper()})"]
     if backup is not None:
         lines.append(f"[备份] {backup}")
     return "\n".join(lines)
@@ -420,7 +677,15 @@ def edit_file(
     )
 
 
-TOOLS = [get_current_time, read_file, write_file, edit_file, *OFFICE_TOOLS]
+TOOLS = [
+    get_current_time,
+    read_file,
+    read_csv,
+    read_json,
+    write_file,
+    edit_file,
+    *OFFICE_TOOLS,
+]
 
 
 def active_model() -> tuple[str, str, str]:
