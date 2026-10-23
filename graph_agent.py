@@ -743,9 +743,15 @@ def build_llm() -> ChatOpenAI:
     )
 
 
-def build_graph():
+def build_graph(manager=None, include_subagent_tools: bool = True):
     """构建并编译 Agent 图：agent -> (tools -> agent)* -> END。"""
-    llm_with_tools = build_llm().bind_tools(TOOLS)
+    tools = list(TOOLS)
+    if include_subagent_tools and manager is not None:
+        from subagent_tools import build_subagent_tools
+
+        tools = tools + build_subagent_tools(manager)
+
+    llm_with_tools = build_llm().bind_tools(tools)
 
     def agent_node(state: MessagesState) -> dict:
         response = llm_with_tools.invoke(state["messages"])
@@ -753,7 +759,7 @@ def build_graph():
 
     builder = StateGraph(MessagesState)
     builder.add_node("agent", agent_node)
-    builder.add_node("tools", ToolNode(TOOLS))
+    builder.add_node("tools", ToolNode(tools))
     builder.add_edge(START, "agent")
     builder.add_conditional_edges("agent", tools_condition)
     builder.add_edge("tools", "agent")
