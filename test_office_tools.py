@@ -415,5 +415,59 @@ class PdfToolTests(unittest.TestCase):
         self.assertIn(".pdf", result)
 
 
+from unittest.mock import patch
+
+from langchain_core.messages import AIMessage, ToolMessage
+
+from graph_agent import TOOLS, _FILE_TOOL_ACTIONS, _print_tool_calls, SYSTEM_PROMPT
+
+
+class IntegrationTests(unittest.TestCase):
+    def test_office_tools_are_registered(self) -> None:
+        names = {getattr(tool, "name", "") for tool in TOOLS}
+        for expected in [
+            "read_docx",
+            "write_docx",
+            "edit_docx",
+            "read_xlsx",
+            "write_xlsx",
+            "edit_xlsx",
+            "read_pptx",
+            "write_pptx",
+            "edit_pptx",
+            "read_pdf",
+        ]:
+            self.assertIn(expected, names)
+
+    def test_prompt_mentions_office_tools(self) -> None:
+        self.assertIn("read_docx", SYSTEM_PROMPT)
+        self.assertIn("read_xlsx", SYSTEM_PROMPT)
+        self.assertIn("read_pptx", SYSTEM_PROMPT)
+        self.assertIn("read_pdf", SYSTEM_PROMPT)
+
+    def test_office_write_log_hides_content(self) -> None:
+        path = r"D:\tmp\notes.docx"
+        ai = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "write_docx",
+                    "args": {"path": path, "content": "SECRET"},
+                    "id": "call-write",
+                }
+            ],
+        )
+        tool_message = ToolMessage(
+            content=f"[新建] {path} (100 字节)",
+            tool_call_id="call-write",
+        )
+        with patch("builtins.print") as mock_print:
+            _print_tool_calls([ai, tool_message], 0)
+        output = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertNotIn("SECRET", output)
+        self.assertIn(f"[完成] 已写入: {path}", output)
+        self.assertIn("write_docx", _FILE_TOOL_ACTIONS)
+
+
 if __name__ == "__main__":
     unittest.main()
