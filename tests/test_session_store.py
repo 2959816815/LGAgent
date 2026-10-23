@@ -1,7 +1,7 @@
 r"""SessionStore 持久化层的单元测试（标准库 unittest）。
 
 运行（本机建议用含 LangChain 的 rag 环境）：
-    D:\Anaconda3\envs\rag\python.exe -m unittest -v test_session_store.py
+    D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_session_store
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ SESSION_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 
 class SessionStoreTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(__file__).resolve().parent / f".test_sessions_{uuid.uuid4().hex[:8]}"
+        self.root = Path(__file__).resolve().parent.parent / f".test_sessions_{uuid.uuid4().hex[:8]}"
         self.now = datetime(2026, 10, 23, 19, 0, 0, tzinfo=timezone(timedelta(hours=8)))
         self.store = SessionStore(self.root, clock=self._clock)
 

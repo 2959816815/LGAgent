@@ -1,5 +1,5 @@
 r"""Office tool unit tests. Run with:
-    D:\Anaconda3\envs\rag\python.exe -m unittest -v test_office_tools.py
+    D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_office_tools
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from office_tools import (
     _validate_existing,
 )
 
-_WORKSPACE = Path(__file__).resolve().parent
+_WORKSPACE = Path(__file__).resolve().parent.parent
 
 
 class OfficeHelpersTests(unittest.TestCase):

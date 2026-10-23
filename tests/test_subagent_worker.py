@@ -24,7 +24,7 @@ class FakeGraph:
 
 class SubagentWorkerTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(__file__).resolve().parent / f".test_worker_{uuid.uuid4().hex[:8]}"
+        self.root = Path(__file__).resolve().parent.parent / f".test_worker_{uuid.uuid4().hex[:8]}"
         self.root.mkdir()
         self.store = SubagentStore(self.root / ".agents")
         self.record = self.store.create("写个报告")

@@ -22,7 +22,7 @@ class FakeGraph:
 
 class SessionFlowTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(__file__).resolve().parent / f".test_flow_{uuid.uuid4().hex[:8]}"
+        self.root = Path(__file__).resolve().parent.parent / f".test_flow_{uuid.uuid4().hex[:8]}"
         self.root.mkdir()
         self.store = SessionStore(self.root)
         self.session = self.store.create("新会话")

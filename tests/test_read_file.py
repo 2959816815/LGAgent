@@ -1,7 +1,7 @@
 r"""read_file 工具的单元测试（标准库 unittest，零第三方依赖）。
 
 运行（本机建议用含 LangChain 的 rag 环境）：
-    D:\Anaconda3\envs\rag\python.exe -m unittest -v test_read_file.py
+    D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_read_file
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 from graph_agent import read_file
 
 # 测试临时目录放在工作区内，避免 DSH 沙箱拒绝系统临时目录
-_WORKSPACE = Path(__file__).resolve().parent
+_WORKSPACE = Path(__file__).resolve().parent.parent
 
 
 def call_read_file(path: Path | str, **kwargs) -> str:

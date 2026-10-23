@@ -19,7 +19,7 @@ from subagent_store import (
 
 class SubagentStoreTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(__file__).resolve().parent / f".test_store_{uuid.uuid4().hex[:8]}"
+        self.root = Path(__file__).resolve().parent.parent / f".test_store_{uuid.uuid4().hex[:8]}"
         self.store = SubagentStore(self.root)
         self.record = self.store.create("整理周报", agent_id="agent-20261023-201500-a1b2")
 

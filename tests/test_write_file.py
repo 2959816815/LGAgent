@@ -1,7 +1,7 @@
 r"""write_file / edit_file 工具的单元测试（标准库 unittest，零第三方依赖）。
 
 运行（本机建议用含 LangChain 的 rag 环境）：
-    D:\Anaconda3\envs\rag\python.exe -m unittest -v test_write_file.py
+    D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_write_file
 
 测试临时目录放在工作区内，避免 DSH 沙箱拒绝系统临时目录。
 """
@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from graph_agent import _print_tool_calls, edit_file, write_file
 
-_WORKSPACE = Path(__file__).resolve().parent
+_WORKSPACE = Path(__file__).resolve().parent.parent
 
 
 def call_write(path: Path | str, content: str, **kwargs) -> str:

@@ -1,7 +1,7 @@
 r"""read_csv / read_json 结构化读取工具的单元测试。
 
 运行：
-    D:\Anaconda3\envs\rag\python.exe -m unittest -v test_read_structured.py
+    D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_read_structured
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from graph_agent import read_csv, read_json
 
-_WORKSPACE = Path(__file__).resolve().parent
+_WORKSPACE = Path(__file__).resolve().parent.parent
 
 
 def call_tool(tool, path: Path | str, **kwargs) -> str:

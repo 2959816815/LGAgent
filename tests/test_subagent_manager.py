@@ -12,9 +12,9 @@ from subagent_store import SubagentStore, now_iso
 
 class SubagentManagerTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(__file__).resolve().parent / f".test_manager_{uuid.uuid4().hex[:8]}"
+        self.root = Path(__file__).resolve().parent.parent / f".test_manager_{uuid.uuid4().hex[:8]}"
         self.root.mkdir()
-        self.worker = Path(__file__).resolve().parent / "subagent_fake_worker.py"
+        self.worker = Path(__file__).resolve().parent.parent / "subagent_fake_worker.py"
         self.manager = SubagentManager(self.root, worker_path=self.worker)
 
     def tearDown(self):
