@@ -17,8 +17,10 @@ r"""graph_agent.py — 一个最小可用的 LangGraph Agent。
 写入和局部修改都会先在原文件旁生成 .bak 备份；只支持文本文件，单次写入上限 5MB。
 读取文本文件最多加载 20MB，可通过 offset/max_chars 分页返回。
 
-如需切回 DeepSeek，设置环境变量 LLM_PROVIDER=deepseek 即可：
-    $env:LLM_PROVIDER="deepseek"; python graph_agent.py
+默认模型由 LLM_PROVIDER 决定（ollama/deepseek/dashscope）；启动后随时用：
+    /model              # 列出三个模型
+    /model 2            # 切到 deepseek-v4.1-flash
+    /model qwen         # 切到 qwen3-vl-plus
 
 本机依赖装在 conda 环境 rag 中；如果默认 python 报 ModuleNotFoundError：
     D:\Anaconda3\envs\rag\python.exe graph_agent.py
@@ -1048,9 +1050,6 @@ def run_chat_loop(
 
 
 def main() -> None:
-    provider, model, base_url = active_model()
-    print(f"[LLM] provider={provider} | model={model} | base_url={base_url}")
-
     try:
         store = SessionStore(Path(__file__).resolve().parent / ".sessions")
     except OSError as exc:
@@ -1069,9 +1068,29 @@ def main() -> None:
     )
     print("输入 /help 查看会话命令；输入 exit / quit / q / 退出 结束。")
 
-    manager = SubagentManager(project_root=Path(__file__).resolve().parent)
-    graph = build_graph(manager=manager)
-    run_chat_loop(store, graph, session, manager=manager)
+    manager = SubagentManager(
+        project_root=Path(__file__).resolve().parent,
+        model_key=initial_model_key(),
+    )
+    try:
+        runtime = ModelRuntime(manager, initial_model_key())
+    except ModelConfigError as exc:
+        print(f"[错误] {exc}")
+        manager.shutdown()
+        return
+
+    profile = runtime.profile
+    print(
+        f"[LLM] {profile.label} | provider={profile.provider} | "
+        f"model={profile.model} | base_url={profile.base_url}"
+    )
+    run_chat_loop(
+        store,
+        runtime.graph,
+        session,
+        manager=manager,
+        runtime=runtime,
+    )
 
 
 if __name__ == "__main__":
