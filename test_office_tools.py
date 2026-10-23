@@ -170,5 +170,88 @@ class WordToolTests(unittest.TestCase):
         self.assertIn("[错误]", result)
 
 
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
+
+from office_tools import edit_xlsx, read_xlsx, write_xlsx
+
+
+class ExcelToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = _WORKSPACE / f".test_office_xlsx_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _make_workbook(self) -> Path:
+        target = self.root / "data.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "销售"
+        sheet["A1"] = "姓名"
+        sheet["B1"] = "金额"
+        sheet["A2"] = "张三"
+        sheet["B2"] = "=SUM(1,2)"
+        sheet["A1"].font = Font(bold=True)
+        other = workbook.create_sheet("备注")
+        other["A1"] = "保留我"
+        workbook.save(target)
+        return target
+
+    def test_read_xlsx_shows_formula_and_sheets(self) -> None:
+        target = self._make_workbook()
+        result = read_xlsx.invoke({"path": str(target)})
+
+        self.assertIn("[工作表] 销售", result)
+        self.assertIn("B2: =SUM(1,2)", result)
+        self.assertIn("[工作表] 备注", result)
+        self.assertIn("保留我", result)
+
+    def test_write_xlsx_from_csv(self) -> None:
+        target = self.root / "new.xlsx"
+        content = "姓名,年龄\n张三,30\n李四,=SUM(B2:B2)\n"
+
+        result = write_xlsx.invoke(
+            {"path": str(target), "content": content, "sheet_name": "名单"}
+        )
+
+        self.assertIn("[新建]", result)
+        workbook = load_workbook(target)
+        sheet = workbook["名单"]
+        self.assertEqual(sheet["A2"].value, "张三")
+        self.assertEqual(sheet["B2"].value, 30)
+        self.assertEqual(sheet["B3"].value, "=SUM(B2:B2)")
+
+    def test_edit_xlsx_preserves_other_sheet_and_backup(self) -> None:
+        target = self._make_workbook()
+
+        result = edit_xlsx.invoke(
+            {
+                "path": str(target),
+                "sheet": "销售",
+                "cell": "B2",
+                "value": "=SUM(3,4)",
+            }
+        )
+
+        self.assertIn("[修改]", result)
+        self.assertTrue((self.root / "data.xlsx.bak").exists())
+        workbook = load_workbook(target)
+        self.assertEqual(workbook["销售"]["B2"].value, "=SUM(3,4)")
+        self.assertEqual(workbook["备注"]["A1"].value, "保留我")
+
+    def test_edit_xlsx_rejects_bad_sheet_and_cell(self) -> None:
+        target = self._make_workbook()
+        bad_sheet = edit_xlsx.invoke(
+            {"path": str(target), "sheet": "不存在", "cell": "A1", "value": "x"}
+        )
+        bad_cell = edit_xlsx.invoke(
+            {"path": str(target), "sheet": "销售", "cell": "1A", "value": "x"}
+        )
+        self.assertIn("[错误]", bad_sheet)
+        self.assertIn("[错误]", bad_cell)
+
+
 if __name__ == "__main__":
     unittest.main()

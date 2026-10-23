@@ -415,3 +415,174 @@ def edit_docx(
     if warnings:
         result += f"\n[提示] {warnings} 处跨格式片段已按段落样式重建"
     return result
+
+
+def _coerce_excel_value(raw: str) -> Any:
+    text = raw
+    stripped = text.strip()
+    if stripped.startswith("="):
+        return stripped
+    if stripped == "":
+        return None
+    if re.fullmatch(r"-?(?:0|[1-9]\d*)(?:\.\d+)?", stripped):
+        if "." in stripped:
+            return float(stripped)
+        return int(stripped)
+    return text
+
+
+def _validate_sheet_name(name: str) -> str | None:
+    if not name or len(name) > 31:
+        return "[错误] sheet_name 不能为空，且最长 31 个字符"
+    if re.search(r"[\[\]:*?/\\]", name):
+        return "[错误] sheet_name 不能包含 [ ] : * ? / \\ 等字符"
+    return None
+
+
+@tool
+def read_xlsx(
+    path: str,
+    max_rows: int = 200,
+    max_cols: int = 30,
+    max_chars: int = _DEFAULT_MAX_CHARS,
+) -> str:
+    """读取 .xlsx 的工作表、单元格值和公式，返回带坐标的文本。"""
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+    error = _validate_existing(target, ".xlsx")
+    if error:
+        return error
+
+    row_limit = _coerce_limit(max_rows, 200, _MAX_ROWS)
+    col_limit = _coerce_limit(max_cols, 30, _MAX_COLS)
+    char_limit = _coerce_max_chars(max_chars)
+
+    try:
+        workbook = load_workbook(str(target), data_only=False, read_only=True)
+    except Exception as exc:
+        return f"[错误] 打开 Excel 失败: {target} ({exc})"
+
+    lines = [f"[工作簿] {target}"]
+    try:
+        for sheet in workbook.worksheets:
+            total_rows = sheet.max_row or 0
+            total_cols = sheet.max_column or 0
+            last_row = min(total_rows, row_limit)
+            last_col = min(total_cols, col_limit)
+            dimension = (
+                f"A1:{get_column_letter(last_col)}{last_row}"
+                if last_row and last_col
+                else "A1"
+            )
+            lines.append(f"[工作表] {sheet.title} ({dimension})")
+            if not last_row or not last_col:
+                continue
+            for row in sheet.iter_rows(
+                min_row=1,
+                max_row=last_row,
+                min_col=1,
+                max_col=last_col,
+            ):
+                cells = [
+                    f"{cell.coordinate}: {cell.value}"
+                    for cell in row
+                    if cell.value is not None
+                ]
+                if cells:
+                    lines.append(" | ".join(cells))
+            if total_rows > row_limit or total_cols > col_limit:
+                lines.append(
+                    f"[提示] 仅显示前 {row_limit} 行 / {col_limit} 列"
+                )
+    finally:
+        workbook.close()
+    return _truncate("\n".join(lines), char_limit)
+
+
+@tool
+def write_xlsx(
+    path: str,
+    content: str,
+    sheet_name: str = "Sheet1",
+) -> str:
+    """用 CSV 文本新建或整体覆盖一个 .xlsx（只写一个工作表）。"""
+    if not isinstance(content, str):
+        return "[错误] content 必须是字符串。"
+    sheet_error = _validate_sheet_name(sheet_name)
+    if sheet_error:
+        return sheet_error
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+    error = _validate_write_target(target, ".xlsx")
+    if error:
+        return error
+    if len(content.encode("utf-8")) > _MAX_WRITE_BYTES:
+        return f"[错误] 内容过大，上限 {_MAX_WRITE_BYTES} 字节"
+
+    try:
+        rows = [row for row in csv.reader(io.StringIO(content)) if any(row)]
+    except csv.Error as exc:
+        return f"[错误] CSV 解析失败: {exc}"
+    if not rows:
+        return "[错误] content 为空，无法生成 Excel"
+
+    try:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = sheet_name
+        for row in rows:
+            sheet.append([_coerce_excel_value(cell) for cell in row])
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+    except Exception as exc:
+        return f"[错误] 生成 Excel 失败: {exc}"
+
+    return _write_office_target(target, buffer.getvalue())
+
+
+@tool
+def edit_xlsx(path: str, sheet: str, cell: str, value: str) -> str:
+    """修改 .xlsx 中某个工作表的单个单元格；保留其他工作表和样式。"""
+    if not isinstance(sheet, str) or not sheet:
+        return "[错误] sheet 不能为空。"
+    if not isinstance(cell, str) or not cell:
+        return "[错误] cell 不能为空。"
+    if not isinstance(value, str):
+        return "[错误] value 必须是字符串。"
+
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+    error = _validate_existing(target, ".xlsx")
+    if error:
+        return error
+
+    normalized = cell.strip().upper()
+    if not re.fullmatch(r"[A-Z]{1,3}[1-9]\d*", normalized):
+        return f"[错误] cell 必须是 A1 形式: {cell!r}"
+
+    try:
+        workbook = load_workbook(str(target), data_only=False)
+    except Exception as exc:
+        return f"[错误] 打开 Excel 失败: {target} ({exc})"
+
+    if sheet not in workbook.sheetnames:
+        return f"[错误] 工作表不存在: {sheet}"
+
+    worksheet = workbook[sheet]
+    worksheet[normalized] = _coerce_excel_value(value)
+
+    try:
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+    except Exception as exc:
+        return f"[错误] 生成 Excel 失败: {target} ({exc})"
+
+    result = _write_office_target(target, buffer.getvalue())
+    result = result.replace("[写入]", "[修改]")
+    return result
