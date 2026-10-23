@@ -763,6 +763,28 @@ def build_graph(
     return builder.compile()
 
 
+class ModelRuntime:
+    """保存当前模型、manager 和已编译图；切换成功后整体替换。"""
+
+    def __init__(self, manager=None, key: str | None = None):
+        self.manager = manager
+        self.key = resolve_selector(key or initial_model_key())
+        self.profile: ModelProfile = get_profile(self.key)
+        self.graph = build_graph(self.manager, model_key=self.key)
+
+    def switch(self, selector: str) -> ModelProfile:
+        new_key = resolve_selector(selector)
+        if new_key == self.key:
+            return self.profile
+        new_graph = build_graph(self.manager, model_key=new_key)
+        if self.manager is not None:
+            self.manager.set_model_key(new_key)
+        self.key = new_key
+        self.profile = get_profile(new_key)
+        self.graph = new_graph
+        return self.profile
+
+
 EXIT_COMMANDS = {"exit", "quit", "q", "退出", "再见"}
 
 
@@ -817,6 +839,7 @@ def _run_chat_loop_inner(
     input_fn: Callable[[str], str] = input,
     output: Callable[[str], None] = print,
     manager=None,
+    runtime: ModelRuntime | None = None,
 ) -> None:
     """终端主循环；抽出来便于用 fake graph / 临时 store 测试。"""
     messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
@@ -841,6 +864,33 @@ def _run_chat_loop_inner(
             try:
                 if name == "help":
                     output(HELP_TEXT)
+                elif name == "model":
+                    if runtime is None:
+                        output("[错误] 模型切换未启用。")
+                    else:
+                        selector = arg.strip()
+                        if not selector or selector.lower() == "list":
+                            output(model_table(runtime.key))
+                        elif selector.lower() == "current":
+                            output(
+                                f"[模型] 当前: {runtime.key} "
+                                f"({runtime.profile.label})"
+                            )
+                        else:
+                            old_key = runtime.key
+                            try:
+                                profile = runtime.switch(selector)
+                            except ModelConfigError as exc:
+                                output(f"[错误] {exc}")
+                            else:
+                                graph = runtime.graph
+                                if runtime.key == old_key:
+                                    output(f"[模型] 已经是 {profile.label}。")
+                                else:
+                                    output(
+                                        f"[模型] 已切换: {profile.label} "
+                                        f"({profile.model})"
+                                    )
                 elif name == "list":
                     output(format_session_list(store.list_sessions(), session.id))
                     for warning in store.pop_warnings():
@@ -982,12 +1032,17 @@ def run_chat_loop(
     input_fn=input,
     output=print,
     manager=None,
+    runtime: ModelRuntime | None = None,
 ) -> None:
     if manager is None:
-        return _run_chat_loop_inner(store, graph, session, input_fn, output, None)
+        return _run_chat_loop_inner(
+            store, graph, session, input_fn, output, None, runtime
+        )
     manager.start_monitor(output)
     try:
-        return _run_chat_loop_inner(store, graph, session, input_fn, output, manager)
+        return _run_chat_loop_inner(
+            store, graph, session, input_fn, output, manager, runtime
+        )
     finally:
         manager.shutdown()
 

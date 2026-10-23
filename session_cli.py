@@ -30,6 +30,7 @@ KNOWN_COMMANDS = {
     "clear",
     "history",
     "agents",
+    "model",
     "help",
 }
 
@@ -41,6 +42,7 @@ HELP_TEXT = """会话命令:
   /clear               清空当前会话历史；先 y/N 确认
   /history [页码]      查看当前会话历史；默认第 1 页
   /agents              查看子 agent 状态
+  /model [本地|deepseek|千问]  查看或切换模型
   /help                显示本帮助
 输入 exit / quit / q / 退出 结束。"""
 
