@@ -163,3 +163,255 @@ def _write_office_target(target: Path, data: bytes) -> str:
     if backup is not None:
         lines.append(f"[备份] {backup}")
     return "\n".join(lines)
+
+
+def _markdown_blocks(content: str) -> list[tuple[str, Any]]:
+    blocks: list[tuple[str, Any]] = []
+    lines = content.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index].rstrip()
+        if not line.strip():
+            index += 1
+            continue
+
+        if line.lstrip().startswith("|"):
+            raw_table: list[str] = []
+            while index < len(lines) and lines[index].lstrip().startswith("|"):
+                raw_table.append(lines[index].strip())
+                index += 1
+            rows = _parse_markdown_table(raw_table)
+            if rows:
+                blocks.append(("table", rows))
+            continue
+
+        heading = re.match(r"^(#{1,3})\s+(.*)$", line)
+        if heading:
+            blocks.append(("heading", (len(heading.group(1)), heading.group(2).strip())))
+            index += 1
+            continue
+
+        bullet = re.match(r"^[-*]\s+(.*)$", line)
+        if bullet:
+            blocks.append(("bullet", bullet.group(1).strip()))
+            index += 1
+            continue
+
+        numbered = re.match(r"^\d+\.\s+(.*)$", line)
+        if numbered:
+            blocks.append(("numbered", numbered.group(1).strip()))
+            index += 1
+            continue
+
+        blocks.append(("paragraph", line.strip()))
+        index += 1
+    return blocks
+
+
+def _parse_markdown_table(lines: list[str]) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for index, line in enumerate(lines):
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if index == 1 and cells and all(
+            re.fullmatch(r":?-{3,}:?", cell) for cell in cells
+        ):
+            continue
+        rows.append(cells)
+    return rows
+
+
+def _iter_docx_paragraphs(doc: Any) -> Iterator[Any]:
+    seen: list[Any] = []
+
+    def emit(paragraphs: Iterator[Any]) -> Iterator[Any]:
+        for paragraph in paragraphs:
+            element = paragraph._p
+            if any(element is existing for existing in seen):
+                continue
+            seen.append(element)
+            yield paragraph
+
+    yield from emit(iter(doc.paragraphs))
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                yield from emit(iter(cell.paragraphs))
+
+
+def _replace_in_docx_paragraph(
+    paragraph: Any,
+    old_text: str,
+    new_text: str,
+    replace_all: bool,
+) -> tuple[int, bool]:
+    if old_text not in paragraph.text:
+        return 0, False
+
+    replaced = 0
+    for run in paragraph.runs:
+        if old_text not in run.text:
+            continue
+        if replace_all:
+            count = run.text.count(old_text)
+            run.text = run.text.replace(old_text, new_text)
+            replaced += count
+        else:
+            run.text = run.text.replace(old_text, new_text, 1)
+            replaced += 1
+            break
+
+    if replaced:
+        return replaced, False
+
+    original = paragraph.text
+    updated = original.replace(old_text, new_text, -1 if replace_all else 1)
+    count = original.count(old_text)
+    if paragraph.runs:
+        first = paragraph.runs[0]
+        for run in paragraph.runs[1:]:
+            run._element.getparent().remove(run._element)
+        first.text = updated
+    else:
+        paragraph.add_run(updated)
+    return count if replace_all else 1, True
+
+
+@tool
+def read_docx(path: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
+    """读取 .docx 的正文段落和表格文字，返回带段落/表格编号的文本。"""
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+
+    error = _validate_existing(target, ".docx")
+    if error:
+        return error
+
+    limit = _coerce_max_chars(max_chars)
+    try:
+        doc = Document(str(target))
+    except Exception as exc:
+        return f"[错误] 打开 Word 失败: {target} ({exc})"
+
+    lines = [f"[文档] {target}"]
+    for index, paragraph in enumerate(doc.paragraphs, 1):
+        text = paragraph.text.strip()
+        if text:
+            lines.append(f"[段落 {index}] {text}")
+
+    for table_index, table in enumerate(doc.tables, 1):
+        lines.append(f"[表格 {table_index}]")
+        for row_index, row in enumerate(table.rows, 1):
+            cells = [cell.text.replace("\n", " ").strip() for cell in row.cells]
+            lines.append(f"  行 {row_index}: " + " | ".join(cells))
+
+    return _truncate("\n".join(lines), limit)
+
+
+@tool
+def write_docx(path: str, content: str) -> str:
+    """新建或整体覆盖 .docx。content 支持 Markdown 标题、列表、段落和管道表格。"""
+    if not isinstance(content, str):
+        return "[错误] content 必须是字符串。"
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+
+    error = _validate_write_target(target, ".docx")
+    if error:
+        return error
+    if len(content.encode("utf-8")) > _MAX_WRITE_BYTES:
+        return f"[错误] 内容过大，上限 {_MAX_WRITE_BYTES} 字节"
+
+    try:
+        doc = Document()
+        for kind, value in _markdown_blocks(content):
+            if kind == "heading":
+                level, text = value
+                doc.add_heading(text, level=level)
+            elif kind == "bullet":
+                doc.add_paragraph(value, style="List Bullet")
+            elif kind == "numbered":
+                doc.add_paragraph(value, style="List Number")
+            elif kind == "table":
+                rows = value
+                table = doc.add_table(rows=len(rows), cols=max(len(row) for row in rows))
+                table.style = "Table Grid"
+                for row_index, row in enumerate(rows):
+                    for col_index, text in enumerate(row):
+                        table.cell(row_index, col_index).text = text
+            else:
+                doc.add_paragraph(value)
+        buffer = io.BytesIO()
+        doc.save(buffer)
+    except Exception as exc:
+        return f"[错误] 生成 Word 失败: {exc}"
+
+    return _write_office_target(target, buffer.getvalue())
+
+
+@tool
+def edit_docx(
+    path: str,
+    old_text: str,
+    new_text: str,
+    replace_all: bool = False,
+) -> str:
+    """在 .docx 中把 old_text 精确替换为 new_text；默认要求唯一匹配。"""
+    if not isinstance(old_text, str) or not isinstance(new_text, str):
+        return "[错误] old_text 和 new_text 必须是字符串。"
+    if not old_text:
+        return "[错误] old_text 不能为空。"
+
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+    error = _validate_existing(target, ".docx")
+    if error:
+        return error
+
+    try:
+        doc = Document(str(target))
+    except Exception as exc:
+        return f"[错误] 打开 Word 失败: {target} ({exc})"
+
+    paragraphs = list(_iter_docx_paragraphs(doc))
+    total = sum(paragraph.text.count(old_text) for paragraph in paragraphs)
+    if total == 0:
+        return f"[错误] 未找到 old_text: {target}"
+    if total > 1 and not replace_all:
+        return (
+            f"[错误] old_text 出现 {total} 次，请提供更长的唯一片段，"
+            "或设置 replace_all=true。"
+        )
+
+    replaced = 0
+    warnings = 0
+    for paragraph in paragraphs:
+        if old_text not in paragraph.text:
+            continue
+        if not replace_all and replaced:
+            break
+        count, rebuilt = _replace_in_docx_paragraph(
+            paragraph, old_text, new_text, replace_all
+        )
+        replaced += count
+        warnings += int(rebuilt)
+
+    if replaced == 0:
+        return f"[错误] 未找到可替换的文本: {target}"
+
+    try:
+        buffer = io.BytesIO()
+        doc.save(buffer)
+    except Exception as exc:
+        return f"[错误] 生成 Word 失败: {target} ({exc})"
+
+    result = _write_office_target(target, buffer.getvalue())
+    result = result.replace("[写入]", "[修改]")
+    if warnings:
+        result += f"\n[提示] {warnings} 处跨格式片段已按段落样式重建"
+    return result
