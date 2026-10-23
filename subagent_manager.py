@@ -39,6 +39,11 @@ class SubagentManager:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._fail_orphans()
+        # 启动时已经完成的记录属于历史，不能在启动时重新播报。
+        # 只通知本次 Manager 生命周期内新完成的子 agent。
+        for existing in self.store.list_records():
+            if existing.status in {"succeeded", "failed"}:
+                self._notified.add(existing.id)
 
     def _fail_orphans(self) -> None:
         for record in self.store.list_records():

@@ -68,6 +68,19 @@ class SubagentManagerTests(unittest.TestCase):
         self.assertTrue(any(record.id in item for item in first))
         self.assertEqual(self.manager.pop_notifications(), [])
 
+    def test_startup_does_not_replay_existing_terminal_record(self):
+        old = self.manager.store.create(
+            "旧任务", agent_id="agent-20261023-201500-beef"
+        )
+        old.status = "succeeded"
+        old.result = "旧结果"
+        self.manager.store.save(old)
+
+        fresh = SubagentManager(self.root, worker_path=self.worker)
+        fresh.refresh()
+        self.assertEqual(fresh.pop_notifications(), [])
+        fresh.shutdown()
+
     def test_startup_orphan_is_failed(self):
         store = SubagentStore(self.root / ".agents")
         orphan = store.create("遗留任务", agent_id="agent-20261023-201500-dead")
