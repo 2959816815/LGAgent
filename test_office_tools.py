@@ -336,5 +336,84 @@ class PptToolTests(unittest.TestCase):
         self.assertIn("[错误]", result)
 
 
+from office_tools import read_pdf
+
+
+def _build_text_pdf(text: str) -> bytes:
+    stream = f"BT /F1 12 Tf 20 100 Td ({text}) Tj ET".encode("latin-1")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf += f"{index} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(pdf)
+    pdf += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for offset in offsets[1:]:
+        pdf += f"{offset:010d} 00000 n \n".encode()
+    pdf += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref}\n%%EOF\n"
+    ).encode()
+    return bytes(pdf)
+
+
+class PdfToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = _WORKSPACE / f".test_office_pdf_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_read_pdf_extracts_text(self) -> None:
+        target = self.root / "hello.pdf"
+        target.write_bytes(_build_text_pdf("Hello Office"))
+        result = read_pdf.invoke({"path": str(target)})
+        self.assertIn("[第 1 页]", result)
+        self.assertIn("Hello Office", result)
+
+    def test_read_pdf_blank_returns_hint(self) -> None:
+        from pypdf import PdfWriter
+
+        target = self.root / "blank.pdf"
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        with open(target, "wb") as handle:
+            writer.write(handle)
+        result = read_pdf.invoke({"path": str(target)})
+        self.assertIn("[提示]", result)
+        self.assertIn("扫描版", result)
+
+    def test_read_pdf_encrypted_returns_error(self) -> None:
+        from pypdf import PdfWriter
+
+        target = self.root / "secret.pdf"
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.encrypt("secret")
+        with open(target, "wb") as handle:
+            writer.write(handle)
+        result = read_pdf.invoke({"path": str(target)})
+        self.assertIn("[错误]", result)
+        self.assertIn("加密", result)
+
+    def test_read_pdf_rejects_wrong_extension(self) -> None:
+        target = self.root / "notes.docx"
+        target.write_bytes(b"x")
+        result = read_pdf.invoke({"path": str(target)})
+        self.assertIn("[错误]", result)
+        self.assertIn(".pdf", result)
+
+
 if __name__ == "__main__":
     unittest.main()

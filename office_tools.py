@@ -822,3 +822,67 @@ def edit_pptx(
     if warnings:
         result += f"\n[提示] {warnings} 处跨格式片段已按段落样式重建"
     return result
+
+
+@tool
+def read_pdf(
+    path: str,
+    max_pages: int = 50,
+    max_chars: int = _DEFAULT_MAX_CHARS,
+) -> str:
+    """只读提取 .pdf 的文字；不做 OCR，不支持修改 PDF。"""
+    try:
+        target = _resolve_path(path)
+    except (OSError, ValueError) as exc:
+        return f"[错误] 路径无效: {path!r} ({exc})"
+    error = _validate_existing(target, ".pdf")
+    if error:
+        return error
+
+    page_limit = _coerce_limit(max_pages, 50, _MAX_PDF_PAGES)
+    char_limit = _coerce_max_chars(max_chars)
+
+    try:
+        reader = PdfReader(str(target))
+    except Exception as exc:
+        return f"[错误] 打开 PDF 失败: {target} ({exc})"
+
+    if reader.is_encrypted:
+        try:
+            unlocked = reader.decrypt("")
+        except Exception:
+            unlocked = 0
+        if not unlocked:
+            return f"[错误] PDF 已加密，无法读取: {target}"
+
+    lines = [f"[PDF] {target}"]
+    page_count = min(len(reader.pages), page_limit)
+    for page_index in range(1, page_count + 1):
+        try:
+            text = reader.pages[page_index - 1].extract_text() or ""
+        except Exception as exc:
+            lines.append(f"[第 {page_index} 页] [错误] 提取失败: {exc}")
+            continue
+        text = text.strip()
+        if text:
+            lines.append(f"[第 {page_index} 页]\n{text}")
+
+    if len(lines) == 1:
+        return "[提示] 未提取到文字，可能是扫描版 PDF"
+    if len(reader.pages) > page_limit:
+        lines.append(f"...[仅显示前 {page_limit} 页]")
+    return _truncate("\n".join(lines), char_limit)
+
+
+OFFICE_TOOLS = [
+    read_docx,
+    write_docx,
+    edit_docx,
+    read_xlsx,
+    write_xlsx,
+    edit_xlsx,
+    read_pptx,
+    write_pptx,
+    edit_pptx,
+    read_pdf,
+]
