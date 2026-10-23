@@ -102,6 +102,7 @@ Rules:
 - Missing title: use `(无标题)`.
 - Missing URL: use `(无链接)`.
 - Missing snippet: use `(无摘要)`.
+- Snippet is capped at 300 characters; longer snippets are truncated and end with `…`.
 - If `results` is empty, return `[搜索结果] 未找到相关内容。`
 - If `results` is not a list or an item is not a dict, return `[错误] 搜索返回格式异常。`
 
@@ -166,9 +167,10 @@ Mock `requests.post`; no real network in unit tests.
 | `test_timeout` | returns `搜索超时` |
 | `test_http_error` | returns `HTTP 500` |
 | `test_malformed_response` | missing/non-list `results` returns format error |
+| `test_truncates_long_snippet` | 500-char snippet becomes at most 300 chars + `…` |
 | `test_empty_query` | returns `搜索词不能为空` |
 
-Expected new test count: 9. Existing suite is 142; expected total 151.
+Expected new test count: 10. Existing suite is 142; expected total 152.
 
 ## Manual Verification
 
@@ -177,7 +179,7 @@ After unit tests pass:
 1. Run one real Tavily search with `max_results=3` for a current-topic query.
 2. Confirm the output has three numbered results with URLs and snippets.
 3. Confirm no API key appears in output.
-4. Start `graph_agent.py`, ask a current-information question, and confirm the model calls `web_search` and cites returned URLs.
+4. Start `graph_agent.py`, ask a current-information question, and confirm the model calls `web_search` and cites returned URLs. If local `qwen3.5:2b` is too slow with the full tool set on CPU, use `/model 2` (DeepSeek) for this smoke.
 
 The real request is a network operation; it is not part of the unit test suite.
 

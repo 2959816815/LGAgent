@@ -26,7 +26,7 @@
 - Create: `D:\Vibecoding\Langgraph\web_search_tool.py`
 - Test: `D:\Vibecoding\Langgraph\tests\test_web_search.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `D:\Vibecoding\Langgraph\tests\test_web_search.py`:
 
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 
@@ -174,7 +174,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_web_search
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'web_search_tool'`.
 
-- [ ] **Step 3: Write the minimal implementation**
+- [x] **Step 3: Write the minimal implementation**
 
 Create `D:\Vibecoding\Langgraph\web_search_tool.py`:
 
@@ -278,7 +278,7 @@ def web_search(query: str, max_results: int = 5) -> str:
     return "\n".join(lines)
 ```
 
-- [ ] **Step 4: Run the new tests to verify they pass**
+- [x] **Step 4: Run the new tests to verify they pass**
 
 Run:
 
@@ -286,9 +286,9 @@ Run:
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_web_search
 ```
 
-Expected: `Ran 9 tests` — `OK`.
+Expected: `Ran 10 tests` — `OK`.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add Langgraph/web_search_tool.py Langgraph/tests/test_web_search.py
@@ -304,7 +304,7 @@ git commit -m "feat: add Tavily web search tool"
 - Modify: `D:\Vibecoding\Langgraph\graph_agent.py:97-108`
 - Modify: `D:\Vibecoding\Langgraph\graph_agent.py:719-727`
 
-- [ ] **Step 1: Add the import**
+- [x] **Step 1: Add the import**
 
 After the existing `model_registry` import block, add:
 
@@ -327,7 +327,7 @@ from model_registry import (
 from web_search_tool import web_search
 ```
 
-- [ ] **Step 2: Add the system-prompt instruction**
+- [x] **Step 2: Add the system-prompt instruction**
 
 Change the first sentence of `SYSTEM_PROMPT` to:
 
@@ -347,7 +347,7 @@ SYSTEM_PROMPT = (
 )
 ```
 
-- [ ] **Step 3: Add the tool to `TOOLS`**
+- [x] **Step 3: Add the tool to `TOOLS`**
 
 Change `TOOLS` to:
 
@@ -364,7 +364,7 @@ TOOLS = [
 ]
 ```
 
-- [ ] **Step 4: Verify registration and the full suite**
+- [x] **Step 4: Verify registration and the full suite**
 
 Run:
 
@@ -384,9 +384,9 @@ Then run:
 D:\Anaconda3\envs\rag\python.exe -m unittest discover -s tests -v
 ```
 
-Expected: `Ran 151 tests` — `OK`.
+Expected: `Ran 152 tests` — `OK`.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```bash
 git add Langgraph/graph_agent.py
@@ -401,7 +401,7 @@ git commit -m "feat: register web search tool"
 - Modify: `D:\Vibecoding\Langgraph\docs\superpowers\plans\2026-10-23-web-search-tool.md` (checkboxes)
 - No code changes expected.
 
-- [ ] **Step 1: Run one real Tavily search**
+- [x] **Step 1: Run one real Tavily search**
 
 Run:
 
@@ -419,15 +419,15 @@ payload["api_key"] = api_key
 
 and keep the `Authorization` header; rerun the smoke. Do not print the key.
 
-- [ ] **Step 2: Run the full suite again**
+- [x] **Step 2: Run the full suite again**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest discover -s tests -v
 ```
 
-Expected: `Ran 151 tests` — `OK`.
+Expected: `Ran 152 tests` — `OK`.
 
-- [ ] **Step 3: Start the agent and confirm the model uses the tool**
+- [x] **Step 3: Start the agent and confirm the model uses the tool**
 
 Run:
 
@@ -444,9 +444,9 @@ At the prompt:
 
 Expected: a `[工具] web_search(...)` line, then an answer with titles/URLs from the tool output.
 
-- [ ] **Step 4: Mark this plan's checkboxes complete and commit**
+- [x] **Step 4: Mark this plan's checkboxes complete and commit**
 
-Change every completed `- [ ] **Step` to `- [x] **Step` in this plan, then:
+Change every completed `- [x] **Step` to `- [x] **Step` in this plan, then:
 
 ```bash
 git add Langgraph/docs/superpowers/plans/2026-10-23-web-search-tool.md
@@ -461,4 +461,10 @@ git commit -m "docs: mark web search tool plan complete"
 - [x] **Placeholder scan:** No `TBD`, `TODO`, `FIXME`, "implement later", or "add appropriate" remains. The 401 fallback is a concrete code change.
 - [x] **Type consistency:** `web_search(query: str, max_results: int = 5) -> str` is used by the tests, `TOOLS`, and the manual smoke. `_coerce_max_results` accepts any value and returns 1–10.
 - [x] **Spec mismatch check:** No raw content, generated answer, cache, or filters are added. The API key is read at call time.
-- [x] **Test count check:** 142 existing + 9 new = 151.
+- [x] **Test count check:** 142 existing + 10 new = 152.
+
+## Post-Implementation Adjustment
+
+Real Tavily snippets can be much longer than expected. During the real smoke test, `web_search` was updated to cap each snippet at 300 characters and append `…` when truncated. This keeps tool output compact for local models. Added `test_truncates_long_snippet`; final suite is 152 tests.
+
+The local `qwen3.5:2b` manual check was too slow on CPU with the full 17-tool set and search results; the agent-level tool call was verified with `/model 2` (DeepSeek), which called `web_search`, received results, and cited URLs. The tool itself is model-independent.
