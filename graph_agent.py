@@ -55,6 +55,7 @@ from model_registry import (
     model_table,
     resolve_selector,
 )
+from web_search_tool import web_search
 
 from typing import Callable
 
@@ -95,7 +96,8 @@ DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 SYSTEM_PROMPT = (
-    "你是一个简洁、可靠的中文助手。需要实时信息时请调用工具，不要编造。"
+    "你是一个简洁、可靠的中文助手。需要实时信息、新闻或网上资料时，"
+    "用 web_search 搜索，不要凭记忆编造最新事实；搜索结果不足时如实说明。"
     "读取文件或目录用 read_file，大文件可用 offset/max_chars 分页；"
     "CSV 用 read_csv，JSON 用 read_json。"
     "文本文件新建/覆盖用 write_file，可用 create_parents 创建父目录、encoding 指定编码；"
@@ -723,6 +725,7 @@ TOOLS = [
     read_json,
     write_file,
     edit_file,
+    web_search,
     *OFFICE_TOOLS,
 ]
 
