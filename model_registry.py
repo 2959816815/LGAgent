@@ -69,8 +69,8 @@ def list_profiles() -> list[ModelProfile]:
             base_url=_env("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"),
             api_key="ollama",
             key_env=None,
-            timeout=120,
-            max_retries=1,
+            timeout=float(_env("OLLAMA_TIMEOUT", "300")),
+            max_retries=0,
             supports_vision=False,
         ),
         ModelProfile(

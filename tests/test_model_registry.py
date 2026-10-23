@@ -83,6 +83,11 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertIn("qwen", table)
         self.assertIn("qwen3-vl-plus", table)
 
+    def test_local_profile_allows_slow_cpu_inference(self):
+        profile = get_profile("local")
+        self.assertGreaterEqual(profile.timeout, 300)
+        self.assertEqual(profile.max_retries, 0)
+
     @patch("model_registry.ChatOpenAI")
     def test_build_chat_model_uses_profile_fields(self, chat_openai):
         with patch.dict(os.environ, {"DASHSCOPE_API_KEY": "test-key"}, clear=False):
