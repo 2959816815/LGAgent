@@ -65,6 +65,7 @@ from session_store import (
 )
 
 from office_tools import OFFICE_TOOLS
+from subagent_manager import SubagentManager
 
 # 始终加载脚本同目录下的 .env，避免从其他目录运行时找不到配置
 load_dotenv(Path(__file__).resolve().with_name(".env"))
@@ -92,6 +93,12 @@ SYSTEM_PROMPT = (
     "修改已有办公文件前先用对应的 read_* 工具确认原文；"
     "写入或修改完成后，只报告文件路径和完成状态，不要复述写入或修改的内容；"
     "路径优先使用绝对路径；工具返回错误时如实说明，不要猜测文件内容。"
+)
+
+SYSTEM_PROMPT += (
+    "\n\n子 agent 编排：当任务可以拆成多个独立子任务时，"
+    "用 spawn_agent 创建子 agent；用 list_agents 查看状态；"
+    "用 wait_agent 等待结果。不要为简单任务创建子 agent。"
 )
 
 # 文件读取的安全上限
@@ -813,12 +820,13 @@ def _print_reply(message, output=None) -> None:
     output(f"[助手] {text or '（模型没有返回文本）'}")
 
 
-def run_chat_loop(
+def _run_chat_loop_inner(
     store: SessionStore,
     graph,
     session: Session,
     input_fn: Callable[[str], str] = input,
     output: Callable[[str], None] = print,
+    manager=None,
 ) -> None:
     """终端主循环；抽出来便于用 fake graph / 临时 store 测试。"""
     messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
@@ -853,6 +861,12 @@ def run_chat_loop(
                     except ValueError as exc:
                         raise SessionCommandError("页码必须是正整数。") from exc
                     output(format_history(session, page))
+                elif name == "agents":
+                    output(
+                        manager.format_table()
+                        if manager is not None
+                        else "[子agent] 当前没有子 agent。"
+                    )
                 elif name == "clear":
                     if not confirm("确认清空当前会话历史？[y/N] ", input_fn):
                         output("已取消。")
@@ -971,6 +985,23 @@ def run_chat_loop(
         _print_reply(result_messages[-1], output)
 
 
+def run_chat_loop(
+    store,
+    graph,
+    session,
+    input_fn=input,
+    output=print,
+    manager=None,
+) -> None:
+    if manager is None:
+        return _run_chat_loop_inner(store, graph, session, input_fn, output, None)
+    manager.start_monitor(output)
+    try:
+        return _run_chat_loop_inner(store, graph, session, input_fn, output, manager)
+    finally:
+        manager.shutdown()
+
+
 def main() -> None:
     provider, model, base_url = active_model()
     print(f"[LLM] provider={provider} | model={model} | base_url={base_url}")
@@ -993,8 +1024,9 @@ def main() -> None:
     )
     print("输入 /help 查看会话命令；输入 exit / quit / q / 退出 结束。")
 
-    graph = build_graph()
-    run_chat_loop(store, graph, session)
+    manager = SubagentManager(project_root=Path(__file__).resolve().parent)
+    graph = build_graph(manager=manager)
+    run_chat_loop(store, graph, session, manager=manager)
 
 
 if __name__ == "__main__":

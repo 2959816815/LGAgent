@@ -74,6 +74,10 @@ class SessionFlowTests(unittest.TestCase):
         self.assertIn("[历史]", output)
         self.assertIn("[用户] 你好", output)
 
+    def test_agents_command_without_manager(self):
+        self._run(["/agents", "exit"])
+        self.assertIn("没有子 agent", "\n".join(self.outputs))
+
 
 if __name__ == "__main__":
     unittest.main()

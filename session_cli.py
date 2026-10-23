@@ -21,7 +21,17 @@ FILE_TOOL_ACTIONS = {
     "edit_pptx": "修改",
 }
 
-KNOWN_COMMANDS = {"new", "list", "sessions", "switch", "delete", "clear", "history", "help"}
+KNOWN_COMMANDS = {
+    "new",
+    "list",
+    "sessions",
+    "switch",
+    "delete",
+    "clear",
+    "history",
+    "agents",
+    "help",
+}
 
 HELP_TEXT = """会话命令:
   /new [标题]          新建并切换；标题可省略
@@ -30,6 +40,7 @@ HELP_TEXT = """会话命令:
   /delete <编号|ID>    删除；先 y/N 确认
   /clear               清空当前会话历史；先 y/N 确认
   /history [页码]      查看当前会话历史；默认第 1 页
+  /agents              查看子 agent 状态
   /help                显示本帮助
 输入 exit / quit / q / 退出 结束。"""
 
