@@ -419,7 +419,8 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, ToolMessage
 
-from graph_agent import TOOLS, _FILE_TOOL_ACTIONS, _print_tool_calls, SYSTEM_PROMPT
+from graph_agent import TOOLS, _print_tool_calls, SYSTEM_PROMPT
+from session_cli import FILE_TOOL_ACTIONS
 
 
 class IntegrationTests(unittest.TestCase):
@@ -466,7 +467,7 @@ class IntegrationTests(unittest.TestCase):
         output = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertNotIn("SECRET", output)
         self.assertIn(f"[完成] 已写入: {path}", output)
-        self.assertIn("write_docx", _FILE_TOOL_ACTIONS)
+        self.assertIn("write_docx", FILE_TOOL_ACTIONS)
 
 
 if __name__ == "__main__":

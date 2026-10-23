@@ -44,6 +44,26 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from typing import Callable
+
+from session_cli import (
+    FILE_TOOL_ACTIONS,
+    HELP_TEXT,
+    SessionCommandError,
+    confirm,
+    format_history,
+    format_session_list,
+    parse_command,
+    resolve_session_target,
+)
+from session_store import (
+    DEFAULT_TITLE,
+    Session,
+    SessionStore,
+    SessionStoreError,
+    clean_title,
+)
+
 from office_tools import OFFICE_TOOLS
 
 # 始终加载脚本同目录下的 .env，避免从其他目录运行时找不到配置
@@ -741,23 +761,12 @@ def build_graph():
 
 
 EXIT_COMMANDS = {"exit", "quit", "q", "退出", "再见"}
-CLEAR_COMMANDS = {"/clear", "clear", "清空"}
 
 
-_FILE_TOOL_ACTIONS = {
-    "write_file": "写入",
-    "edit_file": "修改",
-    "write_docx": "写入",
-    "edit_docx": "修改",
-    "write_xlsx": "写入",
-    "edit_xlsx": "修改",
-    "write_pptx": "写入",
-    "edit_pptx": "修改",
-}
-
-
-def _print_tool_calls(messages: list, start: int) -> None:
+def _print_tool_calls(messages: list, start: int, output=None) -> None:
     """打印本轮工具调用；写文件只显示路径，不把文件内容打到终端。"""
+    if output is None:
+        output = print
     tool_results = {}
     for message in messages[start:]:
         if getattr(message, "type", None) == "tool":
@@ -769,23 +778,25 @@ def _print_tool_calls(messages: list, start: int) -> None:
         for call in getattr(message, "tool_calls", None) or []:
             name = call.get("name", "unknown")
             args = call.get("args", {})
-            action = _FILE_TOOL_ACTIONS.get(name)
+            action = FILE_TOOL_ACTIONS.get(name)
             if action is None:
-                print(f"[工具] {name}({args})")
+                output(f"[工具] {name}({args})")
                 continue
 
             path = args.get("path", "?") if isinstance(args, dict) else "?"
             result = tool_results.get(call.get("id"), "")
             if result.startswith("[错误]"):
-                print(f"[失败] {action}文件: {path}")
+                output(f"[失败] {action}文件: {path}")
             elif result.startswith("[提示]"):
-                print(f"[提示] 文件未变化: {path}")
+                output(f"[提示] 文件未变化: {path}")
             else:
-                print(f"[完成] 已{action}: {path}")
+                output(f"[完成] 已{action}: {path}")
 
 
-def _print_reply(message) -> None:
+def _print_reply(message, output=None) -> None:
     """只打印本轮最终回复，不再重复打印整段历史。"""
+    if output is None:
+        output = print
     content = message.content
     if isinstance(content, list):
         content = "".join(
@@ -793,35 +804,130 @@ def _print_reply(message) -> None:
             for part in content
         )
     text = str(content).strip()
-    print(f"助手: {text or '（模型没有返回文本）'}")
+    output(f"[助手] {text or '（模型没有返回文本）'}")
 
 
-def main() -> None:
-    provider, model, base_url = active_model()
-    print(f"[LLM] provider={provider} | model={model} | base_url={base_url}")
-    print("输入问题开始对话；输入 exit / quit / q / 退出 结束。")
-
-    graph = build_graph()
-    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+def run_chat_loop(
+    store: SessionStore,
+    graph,
+    session: Session,
+    input_fn: Callable[[str], str] = input,
+    output: Callable[[str], None] = print,
+) -> None:
+    """终端主循环；抽出来便于用 fake graph / 临时 store 测试。"""
+    messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
 
     while True:
         try:
-            question = input("\n你: ").strip()
+            raw = input_fn("\n你: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n再见。")
+            try:
+                store.save(session)
+            except SessionStoreError as exc:
+                output(f"[错误] {exc}")
+            output("\n再见。")
             break
 
-        if not question:
-            continue
-        if question.lower() in EXIT_COMMANDS:
-            print("再见。")
-            break
-        if question.lower() in CLEAR_COMMANDS:
-            messages = [SystemMessage(content=SYSTEM_PROMPT)]
-            print("已清空对话历史。")
+        if not raw:
             continue
 
-        messages.append(HumanMessage(content=question))
+        parsed = parse_command(raw)
+        if parsed is not None:
+            name, arg = parsed
+            try:
+                if name == "help":
+                    output(HELP_TEXT)
+                elif name == "list":
+                    output(format_session_list(store.list_sessions(), session.id))
+                    for warning in store.pop_warnings():
+                        output(f"[提示] {warning}")
+                elif name == "history":
+                    try:
+                        page = int(arg) if arg else 1
+                    except ValueError as exc:
+                        raise SessionCommandError("页码必须是正整数。") from exc
+                    output(format_history(session, page))
+                elif name == "clear":
+                    if not confirm("确认清空当前会话历史？[y/N] ", input_fn):
+                        output("已取消。")
+                        continue
+                    session.messages = []
+                    store.save(session)
+                    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+                    output("已清空当前会话历史。")
+                elif name == "new":
+                    store.save(session)
+                    session = store.create(arg or DEFAULT_TITLE)
+                    store.set_active_id(session.id)
+                    messages = [SystemMessage(content=SYSTEM_PROMPT)]
+                    output(f"[会话] 已新建: {session.title} ({session.id})")
+                elif name == "switch":
+                    if not arg:
+                        raise SessionCommandError("用法: /switch <编号|ID>")
+                    metas = store.list_sessions()
+                    target_id = resolve_session_target(arg, metas)
+                    if target_id == session.id:
+                        output("已经是当前会话。")
+                        continue
+                    store.save(session)
+                    session = store.load(target_id)
+                    store.set_active_id(session.id)
+                    messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
+                    output(
+                        f"[会话] 已切换到: {session.title} ({session.id}) | "
+                        f"共 {len(session.messages)} 条消息"
+                    )
+                elif name == "delete":
+                    if not arg:
+                        raise SessionCommandError("用法: /delete <编号|ID>")
+                    metas = store.list_sessions()
+                    target_id = resolve_session_target(arg, metas)
+                    target_meta = next((m for m in metas if m.id == target_id), None)
+                    if target_meta is None:
+                        raise SessionCommandError(f"找不到会话: {target_id}")
+                    if not confirm(
+                        f"确认删除会话 '{target_meta.title}' ({target_id})？[y/N] ",
+                        input_fn,
+                    ):
+                        output("已取消。")
+                        continue
+                    was_current = target_id == session.id
+                    store.delete(target_id)
+                    if was_current:
+                        metas = store.list_sessions()
+                        if metas:
+                            session = store.load(metas[0].id)
+                            store.set_active_id(session.id)
+                            messages = [
+                                SystemMessage(content=SYSTEM_PROMPT),
+                                *session.messages,
+                            ]
+                            output(
+                                f"[会话] 已删除当前会话，切换到: "
+                                f"{session.title} ({session.id})"
+                            )
+                        else:
+                            session = store.create(DEFAULT_TITLE)
+                            store.set_active_id(session.id)
+                            messages = [SystemMessage(content=SYSTEM_PROMPT)]
+                            output("[会话] 已删除当前会话，已新建空会话。")
+                    else:
+                        output(f"[会话] 已删除: {target_meta.title} ({target_id})")
+                else:
+                    output("[命令] 未知命令，输入 /help 查看。")
+            except (SessionStoreError, SessionCommandError, OSError) as exc:
+                output(f"[错误] {exc}")
+            continue
+
+        if raw.lower() in EXIT_COMMANDS:
+            try:
+                store.save(session)
+            except SessionStoreError as exc:
+                output(f"[错误] {exc}")
+            output("再见。")
+            break
+
+        messages.append(HumanMessage(content=raw))
         start = len(messages) - 1
         try:
             result = graph.invoke(
@@ -830,16 +936,59 @@ def main() -> None:
             )
         except KeyboardInterrupt:
             messages.pop()
-            print("\n[已中断本次请求]")
+            output("\n[已中断本次请求]")
             continue
         except Exception as exc:
             messages.pop()
-            print(f"[错误] 调用模型失败: {exc}")
+            output(f"[错误] 调用模型失败: {exc}")
             continue
 
-        messages = result["messages"]
-        _print_tool_calls(messages, start)
-        _print_reply(messages[-1])
+        result_messages = result["messages"]
+        session.messages = [
+            message
+            for message in result_messages
+            if not isinstance(message, SystemMessage)
+        ]
+        if session.title == DEFAULT_TITLE:
+            first_user = next(
+                (m for m in session.messages if isinstance(m, HumanMessage)),
+                None,
+            )
+            if first_user is not None:
+                session.title = clean_title(str(first_user.content)[:30])
+        try:
+            store.save(session)
+        except SessionStoreError as exc:
+            output(f"[错误] 保存会话失败: {exc}")
+        messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
+        _print_tool_calls(result_messages, start, output)
+        _print_reply(result_messages[-1], output)
+
+
+def main() -> None:
+    provider, model, base_url = active_model()
+    print(f"[LLM] provider={provider} | model={model} | base_url={base_url}")
+
+    try:
+        store = SessionStore(Path(__file__).resolve().parent / ".sessions")
+    except OSError as exc:
+        print(f"[错误] 无法创建会话目录: {exc}")
+        return
+    try:
+        session = store.load_active_or_create()
+    except SessionStoreError as exc:
+        print(f"[错误] {exc}")
+        return
+    for warning in store.pop_warnings():
+        print(f"[提示] {warning}")
+    print(
+        f"[会话] {session.title} ({session.id}) | "
+        f"共 {len(session.messages)} 条消息"
+    )
+    print("输入 /help 查看会话命令；输入 exit / quit / q / 退出 结束。")
+
+    graph = build_graph()
+    run_chat_loop(store, graph, session)
 
 
 if __name__ == "__main__":
