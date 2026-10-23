@@ -44,6 +44,16 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from model_registry import (
+    ModelConfigError,
+    ModelProfile,
+    build_chat_model,
+    get_profile,
+    initial_model_key,
+    model_table,
+    resolve_selector,
+)
+
 from typing import Callable
 
 from session_cli import (
@@ -715,42 +725,22 @@ TOOLS = [
 ]
 
 
-def active_model() -> tuple[str, str, str]:
-    """返回当前实际使用的 (provider, model, base_url)。"""
-    if PROVIDER == "deepseek":
-        return PROVIDER, DEEPSEEK_MODEL, DEEPSEEK_BASE_URL
-    return PROVIDER, OLLAMA_MODEL, OLLAMA_BASE_URL
+def active_model(model_key: str | None = None) -> tuple[str, str, str]:
+    """返回指定模型（默认 LLM_PROVIDER）的 (provider, model, base_url)。"""
+    profile = get_profile(model_key or initial_model_key())
+    return profile.provider, profile.model, profile.base_url
 
 
-def build_llm() -> ChatOpenAI:
-    """按 LLM_PROVIDER 创建模型客户端。"""
-    if PROVIDER == "deepseek":
-        if not DEEPSEEK_API_KEY:
-            raise SystemExit("未找到 DEEPSEEK_API_KEY，请检查脚本同目录下的 .env 文件。")
-        return ChatOpenAI(
-            model=DEEPSEEK_MODEL,
-            api_key=DEEPSEEK_API_KEY,
-            base_url=DEEPSEEK_BASE_URL,
-            temperature=0,
-            timeout=60,
-            max_retries=2,
-        )
-
-    if PROVIDER != "ollama":
-        raise SystemExit("LLM_PROVIDER 仅支持 ollama 或 deepseek。")
-
-    # Ollama 的 OpenAI 兼容接口不校验 Key，随便填一个即可
-    return ChatOpenAI(
-        model=OLLAMA_MODEL,
-        api_key="ollama",
-        base_url=OLLAMA_BASE_URL,
-        temperature=0,
-        timeout=120,
-        max_retries=1,
-    )
+def build_llm(model_key: str | None = None) -> ChatOpenAI:
+    """按模型 key 创建客户端；缺 key 时抛 ModelConfigError。"""
+    return build_chat_model(model_key or initial_model_key())
 
 
-def build_graph(manager=None, include_subagent_tools: bool = True):
+def build_graph(
+    manager=None,
+    include_subagent_tools: bool = True,
+    model_key: str | None = None,
+):
     """构建并编译 Agent 图：agent -> (tools -> agent)* -> END。"""
     tools = list(TOOLS)
     if include_subagent_tools and manager is not None:
@@ -758,7 +748,7 @@ def build_graph(manager=None, include_subagent_tools: bool = True):
 
         tools = tools + build_subagent_tools(manager)
 
-    llm_with_tools = build_llm().bind_tools(tools)
+    llm_with_tools = build_llm(model_key).bind_tools(tools)
 
     def agent_node(state: MessagesState) -> dict:
         response = llm_with_tools.invoke(state["messages"])
