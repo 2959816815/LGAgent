@@ -42,7 +42,7 @@ Baseline: 123 tests pass before this plan.
 - Create: `D:\Vibecoding\Langgraph\model_registry.py`
 - Create: `D:\Vibecoding\Langgraph\tests\test_model_registry.py`
 
-- [ ] **Step 1: Write the failing registry tests**
+- [x] **Step 1: Write the failing registry tests**
 
 Create `tests/test_model_registry.py`:
 
@@ -149,7 +149,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run:
 
@@ -159,7 +159,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_model_registry
 
 Expected: `ModuleNotFoundError: No module named 'model_registry'`.
 
-- [ ] **Step 3: Write the registry implementation**
+- [x] **Step 3: Write the registry implementation**
 
 Create `model_registry.py`:
 
@@ -322,7 +322,7 @@ def model_table(current_key: str) -> str:
     return "\n".join(lines)
 ```
 
-- [ ] **Step 4: Run the registry tests**
+- [x] **Step 4: Run the registry tests**
 
 Run:
 
@@ -332,7 +332,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_model_registry
 
 Expected: `Ran 8 tests` — `OK`.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add Langgraph/model_registry.py Langgraph/tests/test_model_registry.py
@@ -347,7 +347,7 @@ git commit -m "feat: add model registry"
 - Modify: `D:\Vibecoding\Langgraph\graph_agent.py:718-773`
 - Create: `D:\Vibecoding\Langgraph\tests\test_graph_model.py`
 
-- [ ] **Step 1: Write the failing graph-model tests**
+- [x] **Step 1: Write the failing graph-model tests**
 
 Create `tests/test_graph_model.py`:
 
@@ -393,7 +393,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_graph_model
@@ -401,7 +401,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_graph_model
 
 Expected: `TypeError: build_graph() got an unexpected keyword argument 'model_key'` (or an `active_model` signature error).
 
-- [ ] **Step 3: Wire the registry into `graph_agent.py`**
+- [x] **Step 3: Wire the registry into `graph_agent.py`**
 
 Add this import after the LangGraph imports:
 
@@ -458,7 +458,7 @@ def build_graph(
     return builder.compile()
 ```
 
-- [ ] **Step 4: Run the graph-model tests**
+- [x] **Step 4: Run the graph-model tests**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_graph_model
@@ -466,7 +466,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_graph_model
 
 Expected: `Ran 2 tests` — `OK`.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```bash
 git add Langgraph/graph_agent.py Langgraph/tests/test_graph_model.py
@@ -482,7 +482,7 @@ git commit -m "feat: build graph for a selected model"
 - Modify: `D:\Vibecoding\Langgraph\session_cli.py:24-45`
 - Create: `D:\Vibecoding\Langgraph\tests\test_model_switch.py`
 
-- [ ] **Step 1: Write the failing runtime and command tests**
+- [x] **Step 1: Write the failing runtime and command tests**
 
 Create `tests/test_model_switch.py`:
 
@@ -624,7 +624,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_model_switch
@@ -632,7 +632,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_model_switch
 
 Expected: `ImportError: cannot import name 'ModelRuntime' from 'graph_agent'`.
 
-- [ ] **Step 3: Add `ModelRuntime` and update the loop**
+- [x] **Step 3: Add `ModelRuntime` and update the loop**
 
 Add `ModelRuntime` immediately after `build_graph`:
 
@@ -725,7 +725,7 @@ def run_chat_loop(
         manager.shutdown()
 ```
 
-- [ ] **Step 4: Add the command and help text in `session_cli.py`**
+- [x] **Step 4: Add the command and help text in `session_cli.py`**
 
 Add `"model"` to `KNOWN_COMMANDS`:
 
@@ -750,7 +750,7 @@ Add this line to `HELP_TEXT` immediately before `/agents`:
   /model [编号|key]     查看或切换模型；/model 列出
 ```
 
-- [ ] **Step 5: Run the switch tests**
+- [x] **Step 5: Run the switch tests**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_model_switch
@@ -758,7 +758,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_model_switch
 
 Expected: `Ran 7 tests` — `OK`.
 
-- [ ] **Step 6: Run existing session tests**
+- [x] **Step 6: Run existing session tests**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_session_flow
@@ -766,7 +766,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_session_flow
 
 Expected: `Ran 5 tests` — `OK` (the new `runtime` argument is optional).
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 ```bash
 git add Langgraph/graph_agent.py Langgraph/session_cli.py Langgraph/tests/test_model_switch.py
@@ -784,7 +784,7 @@ git commit -m "feat: add /model switching command"
 - Modify: `D:\Vibecoding\Langgraph\tests\test_subagent_manager.py`
 - Modify: `D:\Vibecoding\Langgraph\tests\test_subagent_worker.py`
 
-- [ ] **Step 1: Add failing inheritance tests**
+- [x] **Step 1: Add failing inheritance tests**
 
 Append to `tests/test_subagent_manager.py`, inside `SubagentManagerTests`:
 
@@ -828,7 +828,7 @@ Append to `tests/test_subagent_worker.py`, inside `SubagentWorkerTests`:
         )
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_subagent_manager.SubagentManagerTests.test_spawn_passes_model_key tests.test_subagent_worker.SubagentWorkerTests.test_main_forwards_model_key
@@ -836,7 +836,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_subagent_manager.Suba
 
 Expected: manager test fails because `set_model_key` does not exist; worker test fails because `--model-key` is unrecognized.
 
-- [ ] **Step 3: Update `SubagentManager`**
+- [x] **Step 3: Update `SubagentManager`**
 
 Add this import near the top:
 
@@ -890,7 +890,7 @@ Add the model argument to the worker command, before `--agent-id`:
                     ],
 ```
 
-- [ ] **Step 4: Update the real and fake workers**
+- [x] **Step 4: Update the real and fake workers**
 
 In `subagent_worker.py`, add the argument after `--project-root`:
 
@@ -913,7 +913,7 @@ In `subagent_fake_worker.py`, add the same optional argument after `--project-ro
     parser.add_argument("--model-key", default=None)
 ```
 
-- [ ] **Step 5: Run the inheritance tests**
+- [x] **Step 5: Run the inheritance tests**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_subagent_manager.SubagentManagerTests.test_spawn_passes_model_key tests.test_subagent_worker.SubagentWorkerTests.test_main_forwards_model_key
@@ -921,7 +921,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_subagent_manager.Suba
 
 Expected: `Ran 2 tests` — `OK`.
 
-- [ ] **Step 6: Run the full subagent test files**
+- [x] **Step 6: Run the full subagent test files**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_subagent_manager tests.test_subagent_worker
@@ -929,7 +929,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest -v tests.test_subagent_manager test
 
 Expected: `Ran 14 tests` — `OK` (manager 10, worker 4).
 
-- [ ] **Step 7: Commit Task 4**
+- [x] **Step 7: Commit Task 4**
 
 ```bash
 git add Langgraph/subagent_manager.py Langgraph/subagent_worker.py Langgraph/subagent_fake_worker.py Langgraph/tests/test_subagent_manager.py Langgraph/tests/test_subagent_worker.py
@@ -944,7 +944,7 @@ git commit -m "feat: propagate model selection to subagents"
 - Modify: `D:\Vibecoding\Langgraph\graph_agent.py:1005-1033`
 - Modify: `D:\Vibecoding\Langgraph\graph_agent.py` module docstring (optional but recommended)
 
-- [ ] **Step 1: Update `main()`**
+- [x] **Step 1: Update `main()`**
 
 Replace the current `main()` body (lines 1005-1033) with:
 
@@ -993,7 +993,7 @@ def main() -> None:
     )
 ```
 
-- [ ] **Step 2: Update the module docstring example**
+- [x] **Step 2: Update the module docstring example**
 
 Replace the DeepSeek-only paragraph (lines 20-21) with:
 
@@ -1004,7 +1004,7 @@ Replace the DeepSeek-only paragraph (lines 20-21) with:
     /model qwen         # 切到 qwen3-vl-plus
 ```
 
-- [ ] **Step 3: Run the full test suite**
+- [x] **Step 3: Run the full test suite**
 
 ```bash
 D:\Anaconda3\envs\rag\python.exe -m unittest discover -s tests -v
@@ -1012,7 +1012,7 @@ D:\Anaconda3\envs\rag\python.exe -m unittest discover -s tests -v
 
 Expected: `Ran 142 tests` — `OK` (123 baseline + 8 registry + 2 graph-model + 7 switch + 1 manager + 1 worker).
 
-- [ ] **Step 4: Manual smoke test with the local model**
+- [x] **Step 4: Manual smoke test with the local model**
 
 ```bash
 $env:LLM_PROVIDER="ollama"
@@ -1034,7 +1034,7 @@ Expected:
 - `/model local` says `已经是 本地 qwen3.5。`
 - reply contains `本地正常`
 
-- [ ] **Step 5: Optional cloud smoke test (only if keys are available and cost is acceptable)**
+- [x] **Step 5: Optional cloud smoke test (only if keys are available and cost is acceptable)**
 
 ```text
 你: /model 2
@@ -1047,7 +1047,7 @@ Expected:
 
 Expected: switch confirmations; short replies. If a key/network is unavailable, the existing `[错误] 调用模型失败: ...` appears and the model remains selected; switch back with `/model 1`.
 
-- [ ] **Step 6: Commit Task 5**
+- [x] **Step 6: Commit Task 5**
 
 ```bash
 git add Langgraph/graph_agent.py
@@ -1058,21 +1058,21 @@ git commit -m "feat: wire model switcher into the CLI"
 
 ## Plan Self-Review
 
-- [ ] **Spec coverage:** Each spec section maps to a task:
+- [x] **Spec coverage:** Each spec section maps to a task:
   - Model registry/profiles → Task 1
   - `build_llm` / `build_graph` model key → Task 2
   - `/model` list/switch/errors, `ModelRuntime` → Task 3
   - Subagent inheritance → Task 4
   - Startup banner, main wiring, full verification → Task 5
   - No image input, no persistence, no automatic fallback → intentionally absent
-- [ ] **Placeholder scan:** Search this plan for `TBD`, `TODO`, `FIXME`, `implement later`, `add appropriate`. Expected: only this checklist line; do not leave real placeholders.
-- [ ] **Type consistency:**
+- [x] **Placeholder scan:** Search this plan for `TBD`, `TODO`, `FIXME`, `implement later`, `add appropriate`. Expected: only this checklist line; do not leave real placeholders.
+- [x] **Type consistency:**
   - `ModelProfile` fields used by `model_table`, `build_chat_model`, `ModelRuntime`.
   - `ModelRuntime.switch` returns `ModelProfile`; `run_chat_loop` assigns `runtime.graph`, not the return value.
   - `SubagentManager.set_model_key` accepts any alias; `spawn` uses canonical `self._model_key`.
   - Worker `build_graph(..., model_key=args.model_key)` matches the new signature.
   - `/model` branch uses `runtime.key`, `runtime.profile.label`, `runtime.graph`.
-- [ ] **Spec mismatch check:** `qwen3-vl-plus` is only used for text/tool calls in this plan; no image path is added. `deepseek` uses official `deepseek-flash`, display label `deepseek-v4.1-flash`.
-- [ ] **Test count check:** 123 baseline + 8 registry + 2 graph-model + 7 switch + 1 manager + 1 worker = 142.
+- [x] **Spec mismatch check:** `qwen3-vl-plus` is only used for text/tool calls in this plan; no image path is added. `deepseek` uses official `deepseek-flash`, display label `deepseek-v4.1-flash`.
+- [x] **Test count check:** 123 baseline + 8 registry + 2 graph-model + 7 switch + 1 manager + 1 worker = 142.
 
 Fix any mismatch inline before execution.
