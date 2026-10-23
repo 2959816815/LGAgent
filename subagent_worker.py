@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--agent-id", required=True)
     parser.add_argument("--project-root", required=True)
+    parser.add_argument("--model-key", default=None)
     args = parser.parse_args(argv)
 
     store = SubagentStore(Path(args.project_root) / ".agents")
@@ -44,7 +45,10 @@ def main(argv: list[str] | None = None) -> int:
     store.save(record)
 
     try:
-        graph = build_graph(include_subagent_tools=False)
+        graph = build_graph(
+            include_subagent_tools=False,
+            model_key=args.model_key,
+        )
         result = graph.invoke(
             {
                 "messages": [

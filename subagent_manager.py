@@ -9,6 +9,8 @@ from pathlib import Path
 from subagent_cli import format_agent_notification, format_agent_table
 from subagent_store import AgentRecord, SubagentStore, SubagentStoreError, now_iso
 
+from model_registry import initial_model_key, resolve_selector
+
 MAX_RUNNING = 3
 WAIT_DEFAULT = 180
 WAIT_MAX = 600
@@ -25,6 +27,7 @@ class SubagentManager:
         worker_path: Path | None = None,
         max_running: int = MAX_RUNNING,
         poll_interval: float = 0.5,
+        model_key: str | None = None,
     ):
         self.project_root = Path(project_root)
         self.project_root.mkdir(parents=True, exist_ok=True)
@@ -32,6 +35,7 @@ class SubagentManager:
         self.worker_path = Path(worker_path or self.project_root / "subagent_worker.py")
         self.max_running = max_running
         self.poll_interval = poll_interval
+        self._model_key = resolve_selector(model_key or initial_model_key())
         self._processes: dict[str, subprocess.Popen] = {}
         self._notified: set[str] = set()
         self._notifications: list[str] = []
@@ -56,6 +60,14 @@ class SubagentManager:
     def running_count(self) -> int:
         return sum(1 for r in self.store.list_records() if r.status == "running")
 
+    @property
+    def model_key(self) -> str:
+        return self._model_key
+
+    def set_model_key(self, key: str) -> None:
+        """切换后续新建子 agent 使用的模型；运行中的不受影响。"""
+        self._model_key = resolve_selector(key)
+
     def spawn(self, task: str) -> AgentRecord:
         task = task.strip()
         if not task:
@@ -78,6 +90,8 @@ class SubagentManager:
                     [
                         sys.executable,
                         str(self.worker_path),
+                        "--model-key",
+                        self._model_key,
                         "--agent-id",
                         record.id,
                         "--project-root",

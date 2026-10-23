@@ -15,6 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--agent-id", required=True)
     parser.add_argument("--project-root", required=True)
+    parser.add_argument("--model-key", default=None)
     args = parser.parse_args(argv)
 
     store = SubagentStore(Path(args.project_root) / ".agents")

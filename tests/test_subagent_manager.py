@@ -5,6 +5,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from subagent_manager import SubagentError, SubagentManager
 from subagent_store import SubagentStore, now_iso
@@ -91,6 +92,16 @@ class SubagentManagerTests(unittest.TestCase):
         self.assertEqual(loaded.status, "failed")
         self.assertIn("重启", loaded.error or "")
         manager.shutdown()
+
+    def test_spawn_passes_model_key(self):
+        self.manager.set_model_key("qwen")
+        with patch("subagent_manager.subprocess.Popen") as popen:
+            popen.return_value.pid = 1234
+            popen.return_value.poll.return_value = None
+            self.manager.spawn("检查模型")
+            command = popen.call_args.args[0]
+        self.assertIn("--model-key", command)
+        self.assertEqual(command[command.index("--model-key") + 1], "qwen")
 
 
 if __name__ == "__main__":

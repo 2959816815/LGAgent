@@ -53,6 +53,24 @@ class SubagentWorkerTests(unittest.TestCase):
         self.assertEqual(loaded.status, "failed")
         self.assertIn("boom", loaded.error or "")
 
+    def test_main_forwards_model_key(self):
+        with patch("subagent_worker.build_graph", return_value=FakeGraph()) as build:
+            code = main(
+                [
+                    "--agent-id",
+                    self.record.id,
+                    "--project-root",
+                    str(self.root),
+                    "--model-key",
+                    "deepseek",
+                ]
+            )
+        self.assertEqual(code, 0)
+        build.assert_called_once_with(
+            include_subagent_tools=False,
+            model_key="deepseek",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
