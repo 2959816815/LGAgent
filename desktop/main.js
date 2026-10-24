@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, nativeTheme } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -24,6 +24,7 @@ function resolveUserData() {
 
 app.setPath("userData", resolveUserData());
 app.setPath("sessionData", app.getPath("userData"));
+nativeTheme.themeSource = "dark";
 
 function findPython() {
   const candidates = [
@@ -83,6 +84,7 @@ async function createWindow() {
     minWidth: 880,
     minHeight: 600,
     center: true,
+    autoHideMenuBar: true,
     backgroundColor: "#0e0e0e",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -92,6 +94,7 @@ async function createWindow() {
     },
   });
   mainWindow.center();
+  mainWindow.setMenuBarVisibility(false);
   console.log("[main] createWindow: window created, loading URL");
   await mainWindow.loadURL("http://localhost:5173");
   console.log("[main] createWindow: URL loaded");
