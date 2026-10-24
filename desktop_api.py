@@ -340,6 +340,14 @@ def main() -> None:
     args = parser.parse_args()
     config = uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="info")
     server = uvicorn.Server(config)
+    original_startup = server.startup
+
+    async def startup(sockets=None):
+        await original_startup(sockets=sockets)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        print(f"READY {json.dumps({'port': port})}", flush=True)
+
+    server.startup = startup
     server.run()
 
 

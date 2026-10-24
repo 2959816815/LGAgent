@@ -1,3 +1,6 @@
 .sessions/
 .agents/
 .test_*/
+desktop/node_modules/
+desktop/dist/
+desktop/.vite/
