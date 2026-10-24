@@ -4,3 +4,4 @@
 desktop/node_modules/
 desktop/dist/
 desktop/.vite/
+.desktop-data/

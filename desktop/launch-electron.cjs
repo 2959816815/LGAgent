@@ -5,7 +5,7 @@ const electron = require("electron");
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 
-const child = spawn(electron, [path.join(__dirname)], {
+const child = spawn(electron, ["--no-sandbox", "--disable-gpu", path.join(__dirname)], {
   stdio: "inherit",
   env,
   windowsHide: false,

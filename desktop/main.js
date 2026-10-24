@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, screen } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -9,6 +9,21 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 let mainWindow = null;
 let backend = null;
 let config = null;
+
+function resolveUserData() {
+  const preferred = path.join(app.getPath("appData"), "langgraph-agent");
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    return preferred;
+  } catch {
+    const fallback = path.join(PROJECT_ROOT, ".desktop-data");
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
+  }
+}
+
+app.setPath("userData", resolveUserData());
+app.setPath("sessionData", app.getPath("userData"));
 
 function findPython() {
   const candidates = [
@@ -58,12 +73,16 @@ function startBackend() {
 }
 
 async function createWindow() {
+  console.log("[main] createWindow: starting backend");
   await startBackend();
+  console.log("[main] createWindow: backend ready, creating window");
+  const area = screen.getPrimaryDisplay().workAreaSize;
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 1080,
-    minHeight: 700,
+    width: Math.min(960, area.width - 80),
+    height: Math.min(820, area.height - 80),
+    minWidth: 880,
+    minHeight: 600,
+    center: true,
     backgroundColor: "#0e0e0e",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -72,12 +91,19 @@ async function createWindow() {
       sandbox: true,
     },
   });
+  mainWindow.center();
+  console.log("[main] createWindow: window created, loading URL");
   await mainWindow.loadURL("http://localhost:5173");
+  console.log("[main] createWindow: URL loaded");
 }
 
 ipcMain.handle("desktop:config", () => config);
 
-app.whenReady().then(createWindow).catch((error) => {
+console.log("[main] module loaded");
+app.whenReady().then(() => {
+  console.log("[main] app ready");
+  return createWindow();
+}).catch((error) => {
   console.error(error);
   app.quit();
 });

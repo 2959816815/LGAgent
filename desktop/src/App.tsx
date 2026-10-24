@@ -19,6 +19,7 @@ import type {
   SessionMeta,
   ToolEvent,
 } from "./types";
+import { markdownToHtml } from "./markdown";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -217,7 +218,10 @@ function Chat(props: {
             <div key={`${message.role}-${index}`} className={`message ${message.role}`}>
               <div className="avatar">{message.role === "user" ? "你" : "◆"}</div>
               <div className="bubble">
-                <pre>{message.content}</pre>
+                <div
+                  className="markdown"
+                  dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }}
+                />
                 {message.tool_calls?.length ? (
                   <div className="tool-calls">
                     {message.tool_calls.map((call) => (
@@ -233,7 +237,14 @@ function Chat(props: {
           <div className="message assistant">
             <div className="avatar">◆</div>
             <div className="bubble">
-              {props.streamText ? <pre>{props.streamText}</pre> : <div className="typing">正在思考…</div>}
+              {props.streamText ? (
+                <div
+                  className="markdown"
+                  dangerouslySetInnerHTML={{ __html: markdownToHtml(props.streamText) }}
+                />
+              ) : (
+                <div className="typing">正在思考…</div>
+              )}
             </div>
           </div>
         )}
