@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -178,6 +179,15 @@ class FakeGraph:
         yield ("values", {"messages": [HumanMessage(content="hi"), AIMessage(content="你好")]})
 
 
+class BlockingGraph:
+    def __init__(self, release):
+        self.release = release
+
+    def stream(self, *args, **kwargs):
+        yield ("messages", (FakeChunk(content="等"), {}))
+        self.release.wait(timeout=2)
+
+
 class StreamingApiTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(__file__).resolve().parent.parent / f".test_desktop_api_{uuid.uuid4().hex[:8]}"
@@ -205,6 +215,64 @@ class StreamingApiTests(unittest.TestCase):
         self.assertIn("event: token", body)
         self.assertIn('"text": "你"', body)
         self.assertIn("event: done", body)
+
+    def test_another_session_is_not_blocked_by_active_run(self):
+        release = threading.Event()
+        app = create_app(
+            root=self.root,
+            token="t",
+            graph_builder=lambda manager, model_key: BlockingGraph(release),
+        )
+        client = TestClient(app)
+        first = client.post(
+            "/api/sessions", json={"title": "第一条"}, headers=self.headers
+        ).json()
+        second = client.post(
+            "/api/sessions", json={"title": "第二条"}, headers=self.headers
+        ).json()
+
+        with client.stream(
+            "POST",
+            f"/api/sessions/{first['id']}/messages",
+            json={"text": "慢任务"},
+            headers=self.headers,
+        ) as first_response:
+            self.assertEqual(first_response.status_code, 200)
+            with client.stream(
+                "POST",
+                f"/api/sessions/{second['id']}/messages",
+                json={"text": "新会话"},
+                headers=self.headers,
+            ) as second_response:
+                self.assertEqual(second_response.status_code, 200)
+                release.set()
+        release.set()
+
+    def test_graph_setup_failure_does_not_lock_session(self):
+        app = create_app(
+            root=self.root,
+            token="t",
+            graph_builder=lambda manager, model_key: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        client = TestClient(app)
+        session = client.post(
+            "/api/sessions", json={"title": "失败"}, headers=self.headers
+        ).json()
+        first = client.post(
+            f"/api/sessions/{session['id']}/messages",
+            json={"text": "触发失败"},
+            headers=self.headers,
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertIn("event: error", first.text)
+        self.assertIn("boom", first.text)
+        self.assertIn("event: done", first.text)
+        second = client.post(
+            f"/api/sessions/{session['id']}/messages",
+            json={"text": "再次发送"},
+            headers=self.headers,
+        )
+        self.assertEqual(second.status_code, 200)
 
     def test_image_is_rejected_for_local_model(self):
         session = self.client.post(

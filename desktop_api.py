@@ -104,7 +104,7 @@ def create_app(
 
     runs: dict[str, RunState] = {}
     undo_entries: dict[str, list[UndoEntry]] = {}
-    active_run_id: str | None = None
+    active_runs: dict[str, str] = {}
     runs_lock = threading.Lock()
 
     def emit(run: RunState, event: str, data: dict) -> None:
@@ -113,21 +113,22 @@ def create_app(
     def run_graph(run: RunState, session, text: str) -> None:
         from langchain_core.messages import AIMessageChunk
 
-        key = session.model_key or initial_model_key()
-        manager.set_model_key(key)
-        broker = ApprovalBroker(
-            run.run_id,
-            session.id,
-            lambda event, data: emit(run, event, data),
-            undo_entries.setdefault(session.id, []),
-        )
-        run.broker = broker
-        set_approval_broker(broker)
-        graph = graph_builder(manager, model_key=key)
-        messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
-        final_messages = messages
+        final_messages = None
         tool_started: dict[str, float] = {}
         try:
+            key = session.model_key or initial_model_key()
+            manager.set_model_key(key)
+            broker = ApprovalBroker(
+                run.run_id,
+                session.id,
+                lambda event, data: emit(run, event, data),
+                undo_entries.setdefault(session.id, []),
+            )
+            run.broker = broker
+            set_approval_broker(broker)
+            graph = graph_builder(manager, model_key=key)
+            messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
+            final_messages = messages
             for mode, payload in graph.stream(
                 {"messages": messages},
                 config={"recursion_limit": 25},
@@ -196,6 +197,9 @@ def create_app(
             set_approval_broker(None)
             emit(run, "done", {"run_id": run.run_id, "interrupted": run.cancel.is_set()})
             run.events.put(None)
+            with runs_lock:
+                if active_runs.get(session.id) == run.run_id:
+                    active_runs.pop(session.id, None)
 
     app = FastAPI(title="LangGraph Agent Desktop API")
     app.add_middleware(
@@ -361,13 +365,12 @@ def create_app(
 
     @app.post("/api/sessions/{session_id}/messages", dependencies=[Depends(require_token)])
     def post_message(session_id: str, payload: dict):
-        nonlocal active_run_id
         text = str(payload.get("text", "")).strip()
         attachments = payload.get("attachments") or []
         if not text and not attachments:
             raise HTTPException(status_code=400, detail="消息不能为空")
         with runs_lock:
-            if active_run_id is not None:
+            if session_id in active_runs:
                 raise HTTPException(status_code=409, detail="已有回复正在生成")
             try:
                 session = store.load(session_id)
@@ -387,7 +390,7 @@ def create_app(
             store.save(session)
             run = RunState(f"run-{uuid.uuid4().hex[:8]}", session_id)
             runs[run.run_id] = run
-            active_run_id = run.run_id
+            active_runs[session_id] = run.run_id
         thread = threading.Thread(target=run_graph, args=(run, session, text), daemon=True)
         thread.start()
 
@@ -405,7 +408,8 @@ def create_app(
                     run.broker.cancel_all()
                 with runs_lock:
                     runs.pop(run.run_id, None)
-                    active_run_id = None
+                    if active_runs.get(session_id) == run.run_id:
+                        active_runs.pop(session_id, None)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
