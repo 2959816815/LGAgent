@@ -162,7 +162,7 @@ function Chat(props: {
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
+    endRef.current?.scrollIntoView?.({ block: "end" });
   }, [props.messages, props.streamText]);
 
   const model =
