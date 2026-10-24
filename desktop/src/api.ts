@@ -5,6 +5,7 @@ import type {
   ModelInfo,
   SessionDetail,
   SessionMeta,
+  SessionSearchResult,
 } from "./types";
 
 let baseUrl = "http://127.0.0.1:8765";
@@ -44,6 +45,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export async function listSessions(): Promise<SessionMeta[]> {
   const data = await request<{ sessions: SessionMeta[] }>("/api/sessions");
   return data.sessions;
+}
+
+export async function searchSessions(query: string): Promise<SessionSearchResult[]> {
+  const data = await request<{ results: SessionSearchResult[] }>(
+    `/api/sessions/search?q=${encodeURIComponent(query)}`,
+  );
+  return data.results;
 }
 
 export async function createSession(

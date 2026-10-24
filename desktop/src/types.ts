@@ -74,3 +74,11 @@ export interface FileEntry {
   type: "file" | "dir";
   size?: number;
 }
+
+export interface SessionSearchResult {
+  session_id: string;
+  title: string;
+  role: "title" | "human" | "ai" | "tool" | "system" | string;
+  message_index: number;
+  snippet: string;
+}

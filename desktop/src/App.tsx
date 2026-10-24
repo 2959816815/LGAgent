@@ -13,6 +13,7 @@ import {
   renameSession,
   resolveApproval,
   searchFiles,
+  searchSessions,
   streamMessage,
   undoSession,
 } from "./api";
@@ -25,6 +26,7 @@ import type {
   ModelInfo,
   SessionDetail,
   SessionMeta,
+  SessionSearchResult,
   ToolEvent,
 } from "./types";
 import { markdownToHtml } from "./markdown";
@@ -72,6 +74,29 @@ function Sidebar(props: {
   onNew: () => void;
   onDelete: (id: string) => void;
 }) {
+  const [hits, setHits] = useState<SessionSearchResult[]>([]);
+  useEffect(() => {
+    const query = props.query.trim();
+    if (query.length < 2) {
+      setHits([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      searchSessions(query)
+        .then((results) => {
+          if (!cancelled) setHits(results);
+        })
+        .catch(() => {
+          if (!cancelled) setHits([]);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [props.query]);
+
   const filtered = props.sessions.filter((session) =>
     session.title.toLowerCase().includes(props.query.trim().toLowerCase()),
   );
@@ -90,6 +115,26 @@ function Sidebar(props: {
         onChange={(event) => props.onQuery(event.target.value)}
         placeholder="搜索会话"
       />
+      {props.query.trim().length >= 2 && hits.length > 0 && (
+        <div className="search-hits">
+          <div className="group-label">消息命中</div>
+          {hits.map((hit) => (
+            <button
+              key={`${hit.session_id}-${hit.message_index}`}
+              className="search-hit"
+              onClick={() => {
+                props.onSelect(hit.session_id);
+                props.onQuery("");
+              }}
+            >
+              <span className="search-hit-title">
+                {hit.role === "title" ? "标题" : hit.title}
+              </span>
+              <span className="search-hit-snippet">{hit.snippet}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="session-scroll">
         {groupSessions(filtered).map((group) => (
           <section key={group.label} className="session-group">
@@ -724,12 +769,23 @@ function FilePanel(props: { onInsert: (path: string) => void }) {
 
 function RightPanel(props: {
   session: SessionDetail | null;
+  model?: ModelInfo;
+  messages: Message[];
   agents: AgentRecord[];
   tools: ToolEvent[];
   onInsertPath: (path: string) => void;
 }) {
   const [tab, setTab] = useState<"tasks" | "tools" | "context" | "files">("tasks");
   const running = props.agents.filter((agent) => agent.status === "running").length;
+  const windowSize = props.model?.context_window ?? 0;
+  const used = estimateContext(props.messages);
+  const percent = windowSize > 0 ? Math.min(100, (used / windowSize) * 100) : 0;
+  const messageTokens = (role: Message["role"]) =>
+    estimateContext(props.messages.filter((message) => message.role === role));
+  const attachmentCount = props.messages.reduce(
+    (sum, message) => sum + (message.attachments?.length ?? 0),
+    0,
+  );
   return (
     <aside className="right-panel">
       <div className="tabs">
@@ -784,12 +840,67 @@ function RightPanel(props: {
 
       {tab === "context" && (
         <div className="panel-body context-list">
-          <div>模型：{props.session?.model_key ?? "未选择"}</div>
-          <div>会话：{props.session?.id ?? "未选择"}</div>
-          <div>消息数：{props.session?.message_count ?? 0}</div>
-          <div>工具调用：{props.tools.length}</div>
-          <div>子 agent：{props.agents.length}</div>
-          <div className="context-note">上下文由 Python 会话文件持久化；刷新后仍保留。</div>
+          <div className="context-summary">
+            <div>
+              <span>模型</span>
+              <strong>{props.model?.label ?? props.session?.model_key ?? "未选择"}</strong>
+            </div>
+            <div>
+              <span>上下文估算</span>
+              <strong>
+                {formatCount(used)} / {windowSize ? formatCount(windowSize) : "未知"}
+              </strong>
+            </div>
+          </div>
+          {windowSize > 0 && (
+            <>
+              <div className="context-bar" title={`${percent.toFixed(1)}%`}>
+                <span style={{ width: `${percent}%` }} />
+              </div>
+              <div className="context-remaining">
+                已用 {percent.toFixed(1)}% · 剩余 {formatCount(Math.max(0, windowSize - used))} tokens
+              </div>
+            </>
+          )}
+
+          <div className="context-breakdown">
+            {(["user", "assistant", "tool"] as const).map((role) => {
+              const value = messageTokens(role);
+              const label = role === "user" ? "用户消息" : role === "assistant" ? "助手回复" : "工具结果";
+              return (
+                <div key={role} className="context-row">
+                  <span>{label}</span>
+                  <div className="context-row-bar">
+                    <i style={{ width: `${used ? Math.min(100, (value / used) * 100) : 0}%` }} />
+                  </div>
+                  <b>{formatCount(value)}</b>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="context-stats">
+            <div>
+              <b>{props.session?.message_count ?? 0}</b>
+              <span>消息</span>
+            </div>
+            <div>
+              <b>{props.tools.length}</b>
+              <span>工具调用</span>
+            </div>
+            <div>
+              <b>{attachmentCount}</b>
+              <span>图片</span>
+            </div>
+            <div>
+              <b>{props.agents.length}</b>
+              <span>子 agent</span>
+            </div>
+          </div>
+
+          <div className="context-note">
+            上下文按“字符数 ÷ 4”估算，不含系统提示词；精确 token 以模型服务商为准。
+          </div>
         </div>
       )}
 
@@ -1121,6 +1232,8 @@ export function App() {
       />
       <RightPanel
         session={detail}
+        model={currentModel}
+        messages={messages}
         agents={agents}
         tools={tools}
         onInsertPath={(path) => insertPaths([path])}

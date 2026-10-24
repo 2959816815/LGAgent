@@ -53,6 +53,7 @@ class DesktopSessionApiTests(unittest.TestCase):
         self.app = create_app(root=self.root, token="test-token")
         self.client = TestClient(self.app)
         self.headers = {"X-Desktop-Token": "test-token"}
+        self.store = SessionStore(self.root / ".sessions")
 
     def test_health_does_not_require_token(self):
         response = self.client.get("/api/health")
@@ -95,6 +96,44 @@ class DesktopSessionApiTests(unittest.TestCase):
         self.assertEqual(response.json()["title"], "新标题")
         detail = self.client.get(f"/api/sessions/{created['id']}", headers=self.headers)
         self.assertEqual(detail.json()["title"], "新标题")
+
+    def test_search_sessions_finds_message_and_title(self):
+        session = self.store.create("蓝鲸项目周报")
+        session.messages.extend(
+            [
+                HumanMessage(content="本周完成登录接口，下一步处理支付"),
+                AIMessage(content="支付模块计划周五上线"),
+            ]
+        )
+        self.store.save(session)
+
+        by_message = self.client.get(
+            "/api/sessions/search", params={"q": "支付"}, headers=self.headers
+        )
+        self.assertEqual(by_message.status_code, 200)
+        hits = by_message.json()["results"]
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["session_id"], session.id)
+        self.assertIn("支付", hits[0]["snippet"])
+        self.assertEqual(hits[0]["role"], "human")
+
+        by_title = self.client.get(
+            "/api/sessions/search", params={"q": "蓝鲸"}, headers=self.headers
+        )
+        self.assertEqual(by_title.json()["results"][0]["role"], "title")
+
+    def test_search_sessions_is_case_insensitive_and_empty_safe(self):
+        session = self.store.create("API Notes")
+        session.messages.append(HumanMessage(content="Deploy the API tomorrow"))
+        self.store.save(session)
+        response = self.client.get(
+            "/api/sessions/search", params={"q": "deploy"}, headers=self.headers
+        )
+        self.assertIn("Deploy", response.json()["results"][0]["snippet"])
+        empty = self.client.get(
+            "/api/sessions/search", params={"q": "   "}, headers=self.headers
+        )
+        self.assertEqual(empty.json()["results"], [])
 
     def test_model_patch_persists(self):
         created = self.client.post(

@@ -315,6 +315,54 @@ def create_app(
         store.set_active_id(session.id)
         return session_json(session)
 
+    @app.get("/api/sessions/search", dependencies=[Depends(require_token)])
+    def search_sessions(q: str = "") -> dict:
+        query = q.strip()
+        if not query:
+            return {"results": []}
+        needle = query.casefold()
+        results: list[dict] = []
+        for meta in store.list_sessions():
+            title = meta.title or ""
+            if needle in title.casefold():
+                results.append(
+                    {
+                        "session_id": meta.id,
+                        "title": title,
+                        "role": "title",
+                        "message_index": -1,
+                        "snippet": title,
+                    }
+                )
+            try:
+                session = store.load(meta.id)
+            except SessionStoreError:
+                continue
+            for index, message in enumerate(session.messages):
+                text = _text(message.content)
+                position = text.casefold().find(needle)
+                if position < 0:
+                    continue
+                start = max(0, position - 32)
+                end = min(len(text), position + len(query) + 64)
+                snippet = (
+                    ("…" if start else "")
+                    + text[start:end]
+                    + ("…" if end < len(text) else "")
+                )
+                results.append(
+                    {
+                        "session_id": meta.id,
+                        "title": title,
+                        "role": getattr(message, "type", "message"),
+                        "message_index": index,
+                        "snippet": snippet,
+                    }
+                )
+                if len(results) >= 20:
+                    return {"results": results}
+        return {"results": results}
+
     @app.get("/api/sessions/{session_id}", dependencies=[Depends(require_token)])
     def get_session(session_id: str) -> dict:
         try:
