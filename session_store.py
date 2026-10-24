@@ -42,6 +42,7 @@ class Session:
     created_at: str
     updated_at: str
     messages: list[BaseMessage] = field(default_factory=list)
+    model_key: str | None = None
 
 
 @dataclass
@@ -51,6 +52,7 @@ class SessionMeta:
     created_at: str
     updated_at: str
     message_count: int
+    model_key: str | None = None
 
 
 def _now() -> datetime:
@@ -113,7 +115,11 @@ class SessionStore:
             except OSError:
                 pass
 
-    def create(self, title: str = DEFAULT_TITLE) -> Session:
+    def create(
+        self,
+        title: str = DEFAULT_TITLE,
+        model_key: str | None = None,
+    ) -> Session:
         self._ensure_root()
         now = self._clock()
         for _ in range(100):
@@ -128,6 +134,7 @@ class SessionStore:
             created_at=_iso(now),
             updated_at=_iso(now),
             messages=[],
+            model_key=model_key,
         )
         self.save(session)
         return session
@@ -146,6 +153,7 @@ class SessionStore:
             "title": session.title,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
+            "model_key": session.model_key,
             "messages": messages_to_dict(messages),
         }
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -175,9 +183,12 @@ class SessionStore:
             messages = messages_from_dict(raw["messages"])
             if not isinstance(messages, list):
                 raise ValueError("messages 不是列表")
+            model_key = raw.get("model_key")
+            if model_key is not None and not isinstance(model_key, str):
+                raise ValueError("model_key 必须是字符串或 null")
         except (KeyError, TypeError, ValueError) as exc:
             raise SessionStoreError(f"会话文件损坏: {session_id} ({exc})") from exc
-        return Session(session_id, title, created_at, updated_at, messages)
+        return Session(session_id, title, created_at, updated_at, messages, model_key)
 
     def list_sessions(self) -> list[SessionMeta]:
         if not self.root.exists():
@@ -198,6 +209,7 @@ class SessionStore:
                     created_at=session.created_at,
                     updated_at=session.updated_at,
                     message_count=len(session.messages),
+                    model_key=session.model_key,
                 )
             )
         metas.sort(key=lambda meta: (meta.updated_at, meta.id), reverse=True)
