@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
 from desktop_api import create_app
 from session_store import SessionStore
@@ -109,6 +110,50 @@ class DesktopSessionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         for item in response.json()["models"]:
             self.assertNotIn("api_key", item)
+
+
+class FakeChunk(AIMessageChunk):
+    pass
+
+
+class FakeGraph:
+    def __init__(self):
+        self.cancelled = False
+
+    def stream(self, *args, **kwargs):
+        yield ("messages", (FakeChunk(content="你"), {}))
+        yield ("messages", (FakeChunk(content="好"), {}))
+        yield ("updates", {"agent": {"messages": [AIMessage(content="你好")]}})
+        yield ("values", {"messages": [HumanMessage(content="hi"), AIMessage(content="你好")]})
+
+
+class StreamingApiTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(__file__).resolve().parent.parent / f".test_desktop_api_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.app = create_app(
+            root=self.root,
+            token="t",
+            graph_builder=lambda manager, model_key: FakeGraph(),
+        )
+        self.client = TestClient(self.app)
+        self.headers = {"X-Desktop-Token": "t"}
+
+    def test_message_stream_tokens_and_done(self):
+        session = self.client.post(
+            "/api/sessions", json={"title": "流式"}, headers=self.headers
+        ).json()
+        response = self.client.post(
+            f"/api/sessions/{session['id']}/messages",
+            json={"text": "hi"},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+        self.assertIn("event: token", body)
+        self.assertIn('"text": "你"', body)
+        self.assertIn("event: done", body)
 
 
 if __name__ == "__main__":

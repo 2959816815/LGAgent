@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import queue
+import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import AIMessage, ToolMessage
+from fastapi.responses import StreamingResponse
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from graph_agent import build_graph
+from graph_agent import SYSTEM_PROMPT, build_graph
 from model_registry import (
     ModelConfigError,
     get_profile,
@@ -59,6 +65,98 @@ def create_app(
 ) -> FastAPI:
     store = SessionStore(root / ".sessions")
     manager = SubagentManager(project_root=root)
+
+    class RunState:
+        def __init__(self, run_id: str, session_id: str):
+            self.run_id = run_id
+            self.session_id = session_id
+            self.cancel = threading.Event()
+            self.events: queue.Queue = queue.Queue()
+
+    runs: dict[str, RunState] = {}
+    active_run_id: str | None = None
+    runs_lock = threading.Lock()
+
+    def emit(run: RunState, event: str, data: dict) -> None:
+        run.events.put((event, data))
+
+    def run_graph(run: RunState, session, text: str) -> None:
+        from langchain_core.messages import AIMessageChunk
+
+        key = session.model_key or initial_model_key()
+        manager.set_model_key(key)
+        graph = graph_builder(manager, model_key=key)
+        messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
+        final_messages = messages
+        tool_started: dict[str, float] = {}
+        try:
+            for mode, payload in graph.stream(
+                {"messages": messages},
+                config={"recursion_limit": 25},
+                stream_mode=["messages", "updates", "values"],
+            ):
+                if run.cancel.is_set():
+                    break
+                if mode == "messages":
+                    message, _meta = payload
+                    if isinstance(message, AIMessageChunk):
+                        text_chunk = _text(message.content)
+                        if text_chunk:
+                            emit(run, "token", {"run_id": run.run_id, "text": text_chunk})
+                    elif isinstance(message, ToolMessage):
+                        call_id = message.tool_call_id
+                        emit(
+                            run,
+                            "tool_end",
+                            {
+                                "run_id": run.run_id,
+                                "tool": message.name or "tool",
+                                "call_id": call_id,
+                                "status": "error" if str(message.content).startswith("[错误]") else "ok",
+                                "duration_ms": int((time.monotonic() - tool_started.get(call_id, time.monotonic())) * 1000),
+                            },
+                        )
+                elif mode == "updates":
+                    for _node, update in payload.items():
+                        for message in update.get("messages", []):
+                            if isinstance(message, AIMessage) and message.tool_calls:
+                                for call in message.tool_calls:
+                                    call_id = call.get("id") or "unknown"
+                                    tool_started[call_id] = time.monotonic()
+                                    emit(
+                                        run,
+                                        "tool_start",
+                                        {
+                                            "run_id": run.run_id,
+                                            "tool": call.get("name", "tool"),
+                                            "call_id": call_id,
+                                            "args": call.get("args", {}),
+                                        },
+                                    )
+                            elif isinstance(message, ToolMessage):
+                                call_id = message.tool_call_id
+                                emit(
+                                    run,
+                                    "tool_end",
+                                    {
+                                        "run_id": run.run_id,
+                                        "tool": message.name or "tool",
+                                        "call_id": call_id,
+                                        "status": "error" if str(message.content).startswith("[错误]") else "ok",
+                                        "duration_ms": int((time.monotonic() - tool_started.get(call_id, time.monotonic())) * 1000),
+                                    },
+                                )
+                elif mode == "values":
+                    final_messages = payload["messages"]
+            session.messages = [
+                m for m in final_messages if not isinstance(m, SystemMessage)
+            ]
+            store.save(session)
+        except Exception as exc:
+            emit(run, "error", {"run_id": run.run_id, "code": "run_error", "message": str(exc)})
+        finally:
+            emit(run, "done", {"run_id": run.run_id, "interrupted": run.cancel.is_set()})
+            run.events.put(None)
 
     app = FastAPI(title="LangGraph Agent Desktop API")
     app.add_middleware(
@@ -146,6 +244,53 @@ def create_app(
         store.save(session)
         manager.set_model_key(key)
         return {"id": session_id, "model_key": key, "label": profile.label}
+
+    @app.post("/api/sessions/{session_id}/messages", dependencies=[Depends(require_token)])
+    def post_message(session_id: str, payload: dict):
+        nonlocal active_run_id
+        text = str(payload.get("text", "")).strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="消息不能为空")
+        with runs_lock:
+            if active_run_id is not None:
+                raise HTTPException(status_code=409, detail="已有回复正在生成")
+            try:
+                session = store.load(session_id)
+            except SessionStoreError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            session.messages.append(HumanMessage(content=text))
+            if session.title == "新会话":
+                session.title = text[:30]
+            store.save(session)
+            run = RunState(f"run-{uuid.uuid4().hex[:8]}", session_id)
+            runs[run.run_id] = run
+            active_run_id = run.run_id
+        thread = threading.Thread(target=run_graph, args=(run, session, text), daemon=True)
+        thread.start()
+
+        def event_stream():
+            try:
+                while True:
+                    item = run.events.get()
+                    if item is None:
+                        break
+                    event, data = item
+                    yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            finally:
+                run.cancel.set()
+                with runs_lock:
+                    runs.pop(run.run_id, None)
+                    active_run_id = None
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    @app.post("/api/runs/{run_id}/cancel", dependencies=[Depends(require_token)])
+    def cancel_run(run_id: str):
+        run = runs.get(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run 不存在")
+        run.cancel.set()
+        return {"cancelled": run_id}
 
     @app.get("/api/models", dependencies=[Depends(require_token)])
     def models() -> dict:
