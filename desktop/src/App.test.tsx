@@ -8,6 +8,8 @@ vi.mock("./api", () => ({
     { key: "local", label: "本地 qwen3.5", model: "qwen3.5:2b", available: true },
   ]),
   listAgents: vi.fn(async () => []),
+  listFiles: vi.fn(async () => []),
+  searchFiles: vi.fn(async () => []),
   createSession: vi.fn(async () => ({
     id: "20260101-000000-abcd",
     title: "新会话",
@@ -29,6 +31,7 @@ import { App } from "./App";
 beforeEach(() => {
   window.desktop = {
     getConfig: async () => ({ baseUrl: "http://test", token: "t" }),
+    getPathForFile: () => "",
   };
 });
 

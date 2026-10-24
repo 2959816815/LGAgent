@@ -6,5 +6,6 @@ interface DesktopConfig {
 interface Window {
   desktop?: {
     getConfig(): Promise<DesktopConfig>;
+    getPathForFile(file: File): string;
   };
 }

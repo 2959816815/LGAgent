@@ -5,7 +5,15 @@ export interface ModelInfo {
   label: string;
   model: string;
   available: boolean;
+  supports_vision: boolean;
+  context_window: number;
   reason?: string;
+}
+
+export interface Attachment {
+  type: "image";
+  data_url: string;
+  name?: string;
 }
 
 export interface SessionMeta {
@@ -20,6 +28,7 @@ export interface SessionMeta {
 export interface Message {
   role: "user" | "assistant" | "tool" | "system";
   content: string;
+  attachments?: Attachment[];
   tool_calls?: { id: string; name: string; args: Record<string, unknown> }[];
   tool_call_id?: string;
   name?: string;
@@ -46,4 +55,11 @@ export interface ToolEvent {
   args?: Record<string, unknown>;
   status?: string;
   duration_ms?: number;
+}
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  size?: number;
 }

@@ -244,6 +244,19 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: default;
+}
+
+.title-input {
+  width: min(520px, 70vw);
+  padding: 2px 6px;
+  border: 1px solid #3a4a62;
+  border-radius: 5px;
+  background: #0f151d;
+  color: #e6eefc;
+  font-size: 14px;
+  font-weight: 600;
+  outline: none;
 }
 
 .chat-subtitle {
@@ -498,8 +511,135 @@ button {
   line-height: 1.6;
 }
 
+.composer-input {
+  position: relative;
+  width: min(820px, 100%);
+  margin: 0 auto;
+}
+
+.composer-input textarea {
+  width: 100%;
+  margin: 0;
+}
+
+.mention-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 8;
+  max-height: 220px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid #2d3a4d;
+  border-radius: 8px;
+  background: #111720;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+
+.mention-popover button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #c6d4e8;
+  text-align: left;
+  font-size: 12px;
+}
+
+.mention-popover button:hover,
+.mention-popover button.active {
+  background: #1d2a3b;
+  color: #edf4ff;
+}
+
+.mention-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer textarea:focus {
   border-color: #41608f;
+}
+
+.attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: min(820px, 100%);
+  margin: 0 auto 8px;
+}
+
+.attachment-chip {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border: 1px solid #34445f;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #11161d;
+}
+
+.attachment-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.attachment-chip button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(8, 10, 14, 0.82);
+  color: #dfe8f7;
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.attach-button {
+  padding: 6px 9px;
+  border: 1px solid #2d3a4d;
+  border-radius: 6px;
+  background: #121922;
+  color: #9fb0c9;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.attach-button:hover:not(:disabled) {
+  border-color: #41608f;
+  color: #d6e4ff;
+}
+
+.attach-button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.message-images img {
+  max-width: 220px;
+  max-height: 180px;
+  border-radius: 7px;
+  border: 1px solid #2d3642;
+  object-fit: contain;
 }
 
 .composer-bar {
@@ -522,9 +662,13 @@ button {
 
 .composer-hint {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
   color: var(--faint);
   font-size: 11px;
   text-align: right;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .send,
@@ -603,6 +747,106 @@ button {
   color: var(--faint);
   font-size: 11px;
   padding: 8px 4px;
+}
+
+/* File panel */
+
+.file-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 8px;
+}
+
+.file-search {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0c0f13;
+  color: var(--text);
+  outline: none;
+  font-size: 12px;
+}
+
+.file-search:focus {
+  border-color: #3d5a8c;
+}
+
+.file-tree {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  font-size: 12px;
+}
+
+.file-row:hover {
+  background: #1b2129;
+  color: var(--text);
+}
+
+.file-icon {
+  width: 12px;
+  flex: 0 0 12px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.file-row.dir .file-icon {
+  color: var(--accent);
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-loading {
+  padding: 4px 8px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.file-error {
+  color: var(--err);
+  font-size: 11px;
+}
+
+.file-hint {
+  margin-top: 4px;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.composer.drop-active textarea {
+  border-color: var(--accent);
+  background: #151d2b;
+  box-shadow: 0 0 0 2px #7aa2ff22;
+}
+
+.composer.drop-active::before {
+  content: "松开即可引用文件";
+  display: block;
+  width: min(820px, 100%);
+  margin: 0 auto 6px;
+  color: var(--accent);
+  font-size: 11px;
 }
 
 .agent-card {

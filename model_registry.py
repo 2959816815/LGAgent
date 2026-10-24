@@ -52,6 +52,7 @@ class ModelProfile:
     timeout: float
     max_retries: int
     supports_vision: bool
+    context_window: int
 
 
 def _env(name: str, default: str) -> str:
@@ -72,6 +73,7 @@ def list_profiles() -> list[ModelProfile]:
             timeout=float(_env("OLLAMA_TIMEOUT", "300")),
             max_retries=0,
             supports_vision=False,
+            context_window=int(_env("OLLAMA_CONTEXT_WINDOW", "4096")),
         ),
         ModelProfile(
             key="deepseek",
@@ -84,6 +86,7 @@ def list_profiles() -> list[ModelProfile]:
             timeout=60,
             max_retries=2,
             supports_vision=False,
+            context_window=128_000,
         ),
         ModelProfile(
             key="qwen",
@@ -99,6 +102,7 @@ def list_profiles() -> list[ModelProfile]:
             timeout=60,
             max_retries=2,
             supports_vision=True,
+            context_window=262_144,
         ),
     ]
 

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
-from desktop_api import create_app
+from desktop_api import _message_json, create_app
 from session_store import SessionStore
 
 
@@ -79,6 +81,20 @@ class DesktopSessionApiTests(unittest.TestCase):
         response = self.client.get("/api/sessions")
         self.assertEqual(response.status_code, 401)
 
+    def test_session_rename(self):
+        created = self.client.post(
+            "/api/sessions", json={"title": "旧标题"}, headers=self.headers
+        ).json()
+        response = self.client.patch(
+            f"/api/sessions/{created['id']}",
+            json={"title": "新标题"},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["title"], "新标题")
+        detail = self.client.get(f"/api/sessions/{created['id']}", headers=self.headers)
+        self.assertEqual(detail.json()["title"], "新标题")
+
     def test_model_patch_persists(self):
         created = self.client.post(
             "/api/sessions",
@@ -110,6 +126,41 @@ class DesktopSessionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         for item in response.json()["models"]:
             self.assertNotIn("api_key", item)
+            self.assertIn("context_window", item)
+            self.assertIn("supports_vision", item)
+
+
+class WorkspaceFilesApiTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(__file__).resolve().parent.parent / f".test_desktop_files_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        (self.root / "notes.txt").write_text("hello", encoding="utf-8")
+        (self.root / "docs").mkdir()
+        (self.root / "docs" / "spec.md").write_text("spec", encoding="utf-8")
+        (self.root / ".hidden.txt").write_text("hidden", encoding="utf-8")
+        self.app = create_app(root=self.root, token="t")
+        self.client = TestClient(self.app)
+        self.headers = {"X-Desktop-Token": "t"}
+
+    def test_lists_root_and_subdir(self):
+        root = self.client.get("/api/files", headers=self.headers)
+        self.assertEqual(root.status_code, 200)
+        names = [item["name"] for item in root.json()["entries"]]
+        self.assertEqual(names, ["docs", "notes.txt"])
+
+        sub = self.client.get("/api/files?path=docs", headers=self.headers)
+        self.assertEqual(sub.status_code, 200)
+        self.assertEqual(sub.json()["entries"][0]["path"], "docs/spec.md")
+
+    def test_rejects_path_escape(self):
+        response = self.client.get("/api/files?path=..", headers=self.headers)
+        self.assertEqual(response.status_code, 400)
+
+    def test_search_matches_file_name(self):
+        response = self.client.get("/api/files/search?q=spec", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"][0]["path"], "docs/spec.md")
 
 
 class FakeChunk(AIMessageChunk):
@@ -154,6 +205,58 @@ class StreamingApiTests(unittest.TestCase):
         self.assertIn("event: token", body)
         self.assertIn('"text": "你"', body)
         self.assertIn("event: done", body)
+
+    def test_image_is_rejected_for_local_model(self):
+        session = self.client.post(
+            "/api/sessions", json={"title": "本地"}, headers=self.headers
+        ).json()
+        response = self.client.post(
+            f"/api/sessions/{session['id']}/messages",
+            json={
+                "text": "",
+                "attachments": [
+                    {"data_url": "data:image/png;base64,iVBORw0KGgo="},
+                ],
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("不支持图片", response.json()["detail"])
+
+    def test_image_is_accepted_for_qwen_model(self):
+        with patch.dict(os.environ, {"DASHSCOPE_API_KEY": "test-key"}):
+            session = self.client.post(
+                "/api/sessions",
+                json={"title": "看图", "model_key": "qwen"},
+                headers=self.headers,
+            ).json()
+            response = self.client.post(
+                f"/api/sessions/{session['id']}/messages",
+                json={
+                    "text": "看看这张图",
+                    "attachments": [
+                        {"data_url": "data:image/png;base64,iVBORw0KGgo="},
+                    ],
+                },
+                headers=self.headers,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: done", response.text)
+
+    def test_message_json_keeps_image_attachments(self):
+        data = _message_json(
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": "看图"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,abc"},
+                    },
+                ]
+            )
+        )
+        self.assertEqual(data["content"], "看图")
+        self.assertEqual(data["attachments"][0]["data_url"], "data:image/png;base64,abc")
 
 
 if __name__ == "__main__":

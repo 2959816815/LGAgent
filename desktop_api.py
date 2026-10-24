@@ -39,6 +39,24 @@ def _text(content: Any) -> str:
     return str(content)
 
 
+def _image_parts(text: str, attachments: Any) -> str | list[dict]:
+    if not attachments:
+        return text
+    if not isinstance(attachments, list) or len(attachments) > 4:
+        raise HTTPException(400, "一次最多附加 4 张图片")
+    parts: list[dict] = []
+    if text:
+        parts.append({"type": "text", "text": text})
+    for item in attachments:
+        data_url = str((item or {}).get("data_url", ""))
+        if not data_url.startswith("data:image/"):
+            raise HTTPException(400, "图片格式无效")
+        if len(data_url) > 8_000_000:
+            raise HTTPException(400, "图片太大，请压缩到约 6MB 以内")
+        parts.append({"type": "image_url", "image_url": {"url": data_url}})
+    return parts
+
+
 def _message_json(message: Any) -> dict:
     role = {
         "human": "user",
@@ -47,6 +65,15 @@ def _message_json(message: Any) -> dict:
         "system": "system",
     }.get(getattr(message, "type", ""), getattr(message, "type", "unknown"))
     data = {"role": role, "content": _text(message.content)}
+    if isinstance(message.content, list):
+        data["attachments"] = [
+            {"type": "image", "data_url": part["image_url"]["url"]}
+            for part in message.content
+            if isinstance(part, dict)
+            and part.get("type") == "image_url"
+            and isinstance(part.get("image_url"), dict)
+            and part["image_url"].get("url")
+        ]
     if isinstance(message, AIMessage):
         data["tool_calls"] = [
             {"id": call.get("id"), "name": call.get("name"), "args": call.get("args", {})}
@@ -174,6 +201,65 @@ def create_app(
     def health() -> dict:
         return {"status": "ok"}
 
+    file_root = root.resolve()
+    ignored_dirs = {"node_modules", "dist", "build", "__pycache__", ".venv", "venv"}
+
+    def file_entry(path: Path) -> dict:
+        relative = path.relative_to(file_root).as_posix()
+        entry = {"name": path.name, "path": relative, "type": "dir" if path.is_dir() else "file"}
+        if path.is_file():
+            try:
+                entry["size"] = path.stat().st_size
+            except OSError:
+                entry["size"] = 0
+        return entry
+
+    def resolve_file_path(raw: str) -> Path:
+        target = (file_root / (raw or ".")).resolve()
+        if target != file_root and file_root not in target.parents:
+            raise HTTPException(status_code=400, detail="路径不在工作区内")
+        return target
+
+    @app.get("/api/files", dependencies=[Depends(require_token)])
+    def list_files(path: str = ".") -> dict:
+        target = resolve_file_path(path)
+        if not target.is_dir():
+            raise HTTPException(status_code=404, detail="目录不存在")
+        entries: list[dict] = []
+        try:
+            children = list(target.iterdir())
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        children.sort(key=lambda item: (not item.is_dir(), item.name.lower()))
+        for child in children:
+            if child.name.startswith(".") or child.name in ignored_dirs:
+                continue
+            entries.append(file_entry(child))
+            if len(entries) >= 300:
+                break
+        relative = target.relative_to(file_root).as_posix()
+        return {"path": "" if relative == "." else relative, "entries": entries}
+
+    @app.get("/api/files/search", dependencies=[Depends(require_token)])
+    def search_files(q: str = "") -> dict:
+        query = q.strip().lower()
+        results: list[dict] = []
+        if not query:
+            return {"results": results}
+        for dirpath, dirnames, filenames in os.walk(file_root):
+            dirnames[:] = sorted(
+                name
+                for name in dirnames
+                if not name.startswith(".") and name not in ignored_dirs
+            )
+            for name in sorted(filenames):
+                if query not in name.lower() or name.startswith("."):
+                    continue
+                results.append(file_entry(Path(dirpath) / name))
+                if len(results) >= 50:
+                    return {"results": results}
+        return {"results": results}
+
     def session_json(session) -> dict:
         return {
             "id": session.id,
@@ -181,6 +267,7 @@ def create_app(
             "created_at": session.created_at,
             "updated_at": session.updated_at,
             "model_key": session.model_key or initial_model_key(),
+            "message_count": len(session.messages),
             "messages": [_message_json(m) for m in session.messages],
         }
 
@@ -227,6 +314,21 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"deleted": session_id}
 
+    @app.patch("/api/sessions/{session_id}", dependencies=[Depends(require_token)])
+    def rename_session(session_id: str, payload: dict) -> dict:
+        title = str(payload.get("title", "")).strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="标题不能为空")
+        if len(title) > 80:
+            raise HTTPException(status_code=400, detail="标题最多 80 个字符")
+        try:
+            session = store.load(session_id)
+        except SessionStoreError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        session.title = title
+        store.save(session)
+        return {"id": session.id, "title": session.title}
+
     @app.patch("/api/sessions/{session_id}/model", dependencies=[Depends(require_token)])
     def switch_model(session_id: str, payload: dict) -> dict:
         try:
@@ -249,7 +351,8 @@ def create_app(
     def post_message(session_id: str, payload: dict):
         nonlocal active_run_id
         text = str(payload.get("text", "")).strip()
-        if not text:
+        attachments = payload.get("attachments") or []
+        if not text and not attachments:
             raise HTTPException(status_code=400, detail="消息不能为空")
         with runs_lock:
             if active_run_id is not None:
@@ -258,9 +361,17 @@ def create_app(
                 session = store.load(session_id)
             except SessionStoreError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            session.messages.append(HumanMessage(content=text))
+            key = session.model_key or initial_model_key()
+            try:
+                profile = get_profile(key)
+            except ModelConfigError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if attachments and not profile.supports_vision:
+                raise HTTPException(status_code=400, detail="当前模型不支持图片，请切换到千问 VL")
+            content = _image_parts(text, attachments)
+            session.messages.append(HumanMessage(content=content))
             if session.title == "新会话":
-                session.title = text[:30]
+                session.title = (text or "图片对话")[:30]
             store.save(session)
             run = RunState(f"run-{uuid.uuid4().hex[:8]}", session_id)
             runs[run.run_id] = run
@@ -302,6 +413,8 @@ def create_app(
                 "label": profile.label,
                 "model": profile.model,
                 "available": available,
+                "supports_vision": profile.supports_vision,
+                "context_window": profile.context_window,
             }
             if not available:
                 item["reason"] = f"未配置 {profile.key_env}"

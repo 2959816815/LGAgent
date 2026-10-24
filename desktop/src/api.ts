@@ -1,5 +1,7 @@
 import type {
   AgentRecord,
+  Attachment,
+  FileEntry,
   ModelInfo,
   SessionDetail,
   SessionMeta,
@@ -62,6 +64,16 @@ export async function deleteSession(id: string): Promise<void> {
   await request(`/api/sessions/${id}`, { method: "DELETE" });
 }
 
+export async function renameSession(
+  id: string,
+  title: string,
+): Promise<{ id: string; title: string }> {
+  return request(`/api/sessions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
 export async function patchSessionModel(
   id: string,
   modelKey: string,
@@ -82,6 +94,20 @@ export async function listAgents(): Promise<AgentRecord[]> {
   return data.agents;
 }
 
+export async function listFiles(path = "."): Promise<FileEntry[]> {
+  const data = await request<{ entries: FileEntry[] }>(
+    `/api/files?path=${encodeURIComponent(path)}`,
+  );
+  return data.entries;
+}
+
+export async function searchFiles(query: string): Promise<FileEntry[]> {
+  const data = await request<{ results: FileEntry[] }>(
+    `/api/files/search?q=${encodeURIComponent(query)}`,
+  );
+  return data.results;
+}
+
 export async function cancelRun(runId: string): Promise<void> {
   await request(`/api/runs/${runId}/cancel`, { method: "POST" });
 }
@@ -95,11 +121,12 @@ export async function* streamMessage(
   sessionId: string,
   text: string,
   signal: AbortSignal,
+  attachments: Attachment[] = [],
 ): AsyncGenerator<StreamEvent> {
   const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/messages`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, attachments }),
     signal,
   });
   if (!response.ok) {
