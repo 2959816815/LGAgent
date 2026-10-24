@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from graph_agent import SYSTEM_PROMPT, build_graph
+from approval import ApprovalBroker, UndoEmpty, UndoEntry, set_current as set_approval_broker, undo_last
 from model_registry import (
     ModelConfigError,
     get_profile,
@@ -99,8 +100,10 @@ def create_app(
             self.session_id = session_id
             self.cancel = threading.Event()
             self.events: queue.Queue = queue.Queue()
+            self.broker: ApprovalBroker | None = None
 
     runs: dict[str, RunState] = {}
+    undo_entries: dict[str, list[UndoEntry]] = {}
     active_run_id: str | None = None
     runs_lock = threading.Lock()
 
@@ -112,6 +115,14 @@ def create_app(
 
         key = session.model_key or initial_model_key()
         manager.set_model_key(key)
+        broker = ApprovalBroker(
+            run.run_id,
+            session.id,
+            lambda event, data: emit(run, event, data),
+            undo_entries.setdefault(session.id, []),
+        )
+        run.broker = broker
+        set_approval_broker(broker)
         graph = graph_builder(manager, model_key=key)
         messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
         final_messages = messages
@@ -182,6 +193,7 @@ def create_app(
         except Exception as exc:
             emit(run, "error", {"run_id": run.run_id, "code": "run_error", "message": str(exc)})
         finally:
+            set_approval_broker(None)
             emit(run, "done", {"run_id": run.run_id, "interrupted": run.cancel.is_set()})
             run.events.put(None)
 
@@ -389,6 +401,8 @@ def create_app(
                     yield f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
             finally:
                 run.cancel.set()
+                if run.broker is not None:
+                    run.broker.cancel_all()
                 with runs_lock:
                     runs.pop(run.run_id, None)
                     active_run_id = None
@@ -401,7 +415,28 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail="run 不存在")
         run.cancel.set()
+        if run.broker is not None:
+            run.broker.cancel_all()
         return {"cancelled": run_id}
+
+    @app.post("/api/runs/{run_id}/approvals/{approval_id}", dependencies=[Depends(require_token)])
+    def resolve_approval(run_id: str, approval_id: str, payload: dict):
+        run = runs.get(run_id)
+        if run is None or run.broker is None:
+            raise HTTPException(status_code=404, detail="run 不存在")
+        approved = bool(payload.get("approved"))
+        if not run.broker.resolve(approval_id, approved):
+            raise HTTPException(status_code=404, detail="审批请求不存在或已处理")
+        return {"approval_id": approval_id, "approved": approved}
+
+    @app.post("/api/sessions/{session_id}/undo", dependencies=[Depends(require_token)])
+    def undo_write(session_id: str):
+        entries = undo_entries.get(session_id, [])
+        try:
+            path = undo_last(entries)
+        except UndoEmpty as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"restored": str(path)}
 
     @app.get("/api/models", dependencies=[Depends(require_token)])
     def models() -> dict:

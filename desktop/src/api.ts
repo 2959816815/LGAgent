@@ -112,6 +112,21 @@ export async function cancelRun(runId: string): Promise<void> {
   await request(`/api/runs/${runId}/cancel`, { method: "POST" });
 }
 
+export async function resolveApproval(
+  runId: string,
+  approvalId: string,
+  approved: boolean,
+): Promise<void> {
+  await request(`/api/runs/${runId}/approvals/${approvalId}`, {
+    method: "POST",
+    body: JSON.stringify({ approved }),
+  });
+}
+
+export async function undoSession(sessionId: string): Promise<{ restored: string }> {
+  return request(`/api/sessions/${sessionId}/undo`, { method: "POST" });
+}
+
 export interface StreamEvent {
   event: string;
   data: Record<string, unknown>;

@@ -11,11 +11,14 @@ import {
   listSessions,
   patchSessionModel,
   renameSession,
+  resolveApproval,
   searchFiles,
   streamMessage,
+  undoSession,
 } from "./api";
 import type {
   AgentRecord,
+  ApprovalRequest,
   Attachment,
   FileEntry,
   Message,
@@ -176,6 +179,9 @@ function Chat(props: {
   runId: string | null;
   error: string;
   attachments: Attachment[];
+  approval: ApprovalRequest | null;
+  undoAvailable: boolean;
+  undoing: boolean;
   onInput: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
@@ -185,6 +191,8 @@ function Chat(props: {
   onAttachImages: (files: File[]) => void;
   onRemoveAttachment: (index: number) => void;
   onRename: (title: string) => void;
+  onApproval: (approved: boolean) => void;
+  onUndo: () => void;
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -314,6 +322,11 @@ function Chat(props: {
           </div>
         </div>
         <div className="chat-actions">
+          {props.undoAvailable && (
+            <button className="undo-button" onClick={props.onUndo} disabled={props.undoing}>
+              {props.undoing ? "撤销中…" : "撤销上次写入"}
+            </button>
+          )}
           <span className={`live-dot ${props.streaming ? "on" : ""}`} />
           {props.streaming ? "生成中" : "就绪"}
         </div>
@@ -381,6 +394,25 @@ function Chat(props: {
           </div>
         )}
         {props.error && <div className="chat-error">{props.error}</div>}
+        {props.approval && (
+          <div className="approval-card">
+            <div className="approval-head">
+              <strong>{props.approval.title}</strong>
+              <span className="approval-path">{props.approval.path}</span>
+            </div>
+            <pre className="approval-diff">
+              {props.approval.diff || props.approval.detail || "此操作会修改文件。"}
+            </pre>
+            <div className="approval-actions">
+              <button className="approval-deny" onClick={() => props.onApproval(false)}>
+                拒绝
+              </button>
+              <button className="approval-allow" onClick={() => props.onApproval(true)}>
+                允许执行
+              </button>
+            </div>
+          </div>
+        )}
         <div ref={endRef} />
       </div>
 
@@ -795,6 +827,9 @@ export function App() {
   const [tools, setTools] = useState<ToolEvent[]>([]);
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [approval, setApproval] = useState<ApprovalRequest | null>(null);
+  const [undoAvailable, setUndoAvailable] = useState(false);
+  const [undoing, setUndoing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const currentModel =
@@ -814,6 +849,8 @@ export function App() {
     setStreamText("");
     setError("");
     setAttachments([]);
+    setApproval(null);
+    setUndoAvailable(false);
   }
 
   async function newSession(): Promise<void> {
@@ -825,6 +862,8 @@ export function App() {
     setStreamText("");
     setError("");
     setAttachments([]);
+    setApproval(null);
+    setUndoAvailable(false);
   }
 
   async function removeSession(id: string): Promise<void> {
@@ -944,6 +983,10 @@ export function App() {
                 : tool,
             ),
           );
+        } else if (event.event === "approval_request") {
+          setApproval(event.data as unknown as ApprovalRequest);
+        } else if (event.event === "undo_available") {
+          setUndoAvailable(true);
         } else if (event.event === "error") {
           setError(String(event.data.message ?? "模型调用失败"));
         }
@@ -966,6 +1009,31 @@ export function App() {
       }
       await refreshSessions().catch(() => undefined);
       await loadAgents();
+    }
+  }
+
+  async function decideApproval(approved: boolean): Promise<void> {
+    if (!approval) return;
+    const current = approval;
+    setApproval(null);
+    try {
+      await resolveApproval(current.run_id, current.approval_id, approved);
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  }
+
+  async function undoLastWrite(): Promise<void> {
+    if (!detail || undoing) return;
+    setUndoing(true);
+    try {
+      await undoSession(detail.id);
+      setUndoAvailable(false);
+      setError("");
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setUndoing(false);
     }
   }
 
@@ -1034,6 +1102,9 @@ export function App() {
         runId={runId}
         error={error}
         attachments={attachments}
+        approval={approval}
+        undoAvailable={undoAvailable}
+        undoing={undoing}
         onInput={setInput}
         onSend={() => void send()}
         onStop={stop}
@@ -1045,6 +1116,8 @@ export function App() {
           setAttachments((previous) => previous.filter((_, i) => i !== index))
         }
         onRename={(title) => void renameCurrent(title)}
+        onApproval={(approved) => void decideApproval(approved)}
+        onUndo={() => void undoLastWrite()}
       />
       <RightPanel
         session={detail}

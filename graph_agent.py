@@ -78,6 +78,7 @@ from session_store import (
 )
 
 from office_tools import OFFICE_TOOLS
+from approval import wrap_tools
 from subagent_manager import SubagentManager
 
 # 始终加载脚本同目录下的 .env，避免从其他目录运行时找不到配置
@@ -752,6 +753,7 @@ def build_graph(
         from subagent_tools import build_subagent_tools
 
         tools = tools + build_subagent_tools(manager)
+    tools = wrap_tools(tools)
 
     llm_with_tools = build_llm(model_key).bind_tools(tools)
 

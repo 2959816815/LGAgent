@@ -57,6 +57,17 @@ export interface ToolEvent {
   duration_ms?: number;
 }
 
+export interface ApprovalRequest {
+  run_id: string;
+  session_id: string;
+  approval_id: string;
+  tool: string;
+  title: string;
+  path: string;
+  diff: string;
+  detail: string;
+}
+
 export interface FileEntry {
   name: string;
   path: string;
