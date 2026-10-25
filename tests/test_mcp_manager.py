@@ -51,6 +51,15 @@ class McpManagerTests(unittest.TestCase):
         self.managers.append(manager)
         return manager
 
+    def test_enabled_ids_and_tool_specs(self) -> None:
+        self._config([self._fake("demo", True), self._fake("off", False)])
+        manager = self._manager()
+        manager.start_enabled()
+        self.assertEqual(manager.enabled_ids(), ["demo"])
+        specs = manager.tool_specs("demo")
+        self.assertTrue(specs)
+        self.assertIn("echo", [spec.name for spec in specs])
+
     def test_disabled_server_does_not_start(self) -> None:
         self._config([self._fake("demo", True), self._fake("off", False)])
         manager = self._manager()

@@ -4,7 +4,14 @@
       "id": "playwright",
       "name": "Playwright",
       "enabled": true,
-      "command": ["npx", "-y", "@playwright/mcp@latest"],
+      "command": [
+        "node",
+        "desktop/node_modules/@playwright/mcp/cli.js",
+        "--browser",
+        "chrome",
+        "--headless",
+        "--isolated"
+      ],
       "cwd": ".",
       "permission": "ask"
     },

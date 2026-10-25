@@ -7,6 +7,12 @@ const readline = require("readline");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const SIDECAR_TIMEOUT_MS = Number(process.env.DSH_SIDECAR_TIMEOUT_MS) || 60_000;
+const SIDECAR_TEMP = path.join(PROJECT_ROOT, ".desktop-temp");
+try {
+  fs.mkdirSync(SIDECAR_TEMP, { recursive: true });
+} catch {
+  // 交给子进程报错；这里不阻断启动
+}
 let mainWindow = null;
 let backend = null;
 let config = null;
@@ -47,7 +53,14 @@ function startBackend() {
     const startedAt = Date.now();
     backend = spawn(python, ["-m", "desktop_api", "--port", "0"], {
       cwd: PROJECT_ROOT,
-      env: { ...process.env, DSH_DESKTOP_TOKEN: token },
+      env: {
+        ...process.env,
+        DSH_DESKTOP_TOKEN: token,
+        TEMP: SIDECAR_TEMP,
+        TMP: SIDECAR_TEMP,
+        TMPDIR: SIDECAR_TEMP,
+        PLAYWRIGHT_BROWSERS_PATH: path.join(SIDECAR_TEMP, "playwright-browsers"),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
 

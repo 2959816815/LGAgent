@@ -33,7 +33,7 @@ class FakeManager:
     def client_for(self, server_id):
         return self.client
 
-    def permission_for(self, server_id):
+    def permission_for(self, server_id, tool=None):
         return self.permission
 
 

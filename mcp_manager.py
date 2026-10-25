@@ -163,6 +163,19 @@ class McpManager:
         self.refresh()
         return [self._status(item) for item in self._servers()]
 
+    def enabled_ids(self) -> list[str]:
+        """返回当前启用且可参与 Agent 的工具服务器 id。"""
+        return [status.id for status in self.list_servers() if status.enabled]
+
+    def get_status(self, server_id: str) -> dict[str, Any]:
+        """兼容 mcp_tools 的状态查询接口。"""
+        item = self._find(server_id)
+        return {"id": server_id, "status": self._status(item).status}
+
+    def tool_specs(self, server_id: str) -> list[McpToolSpec]:
+        """返回某服务器已发现的工具规格。"""
+        return list(self.client_for(server_id).tools)
+
     def client_for(self, server_id: str) -> StdioMcpClient:
         item = self._find(server_id)
         if not item.get("enabled", True):
