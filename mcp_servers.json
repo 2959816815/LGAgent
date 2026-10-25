@@ -1,0 +1,20 @@
+{
+  "servers": [
+    {
+      "id": "playwright",
+      "name": "Playwright",
+      "enabled": true,
+      "command": ["npx", "-y", "@playwright/mcp@latest"],
+      "cwd": ".",
+      "permission": "ask"
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch",
+      "enabled": false,
+      "command": ["uvx", "mcp-server-fetch"],
+      "cwd": ".",
+      "permission": "ask"
+    }
+  ]
+}
