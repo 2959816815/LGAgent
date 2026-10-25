@@ -117,6 +117,15 @@ def build_preview(tool: str, args: dict) -> dict:
     """给前端展示的标题、路径和 diff/参数摘要。"""
     target = _target_path(args)
     title = TITLES.get(tool, tool)
+    if tool.startswith("mcp__"):
+        detail = json.dumps(args, ensure_ascii=False, indent=2)[:4000]
+        return {
+            "tool": tool,
+            "title": "MCP 工具",
+            "path": "",
+            "diff": "",
+            "detail": detail,
+        }
     if tool in {"write_file", "edit_file"}:
         old = _read_text(target) if target else None
         if tool == "write_file":
@@ -285,3 +294,38 @@ def _wrap(tool: Any) -> Any:
 
 def wrap_tools(tools: list[Any]) -> list[Any]:
     return [_wrap(tool) if tool.name in WRITE_TOOL_NAMES else tool for tool in tools]
+
+
+def _wrap_mcp(tool: Any) -> Any:
+    name = tool.name
+    metadata = getattr(tool, "metadata", None)
+    permission = "auto"
+    if isinstance(metadata, dict):
+        permission = str(metadata.get("permission") or "auto")
+
+    def run_tool(**kwargs):
+        broker = current_broker()
+        if broker is not None and permission == "ask":
+            try:
+                broker.request(name, kwargs)
+            except ApprovalDenied:
+                return "[错误] 用户拒绝执行 MCP 工具"
+            except ApprovalTimeout:
+                return "[错误] 审批超时，已取消 MCP 工具"
+        if permission == "deny":
+            return "[错误] MCP 工具已被配置禁用"
+        try:
+            return tool.func(**kwargs)
+        except Exception as exc:
+            return f"[错误] MCP 工具失败: {exc}"
+
+    return StructuredTool.from_function(
+        func=run_tool,
+        name=name,
+        description=tool.description,
+        args_schema=tool.args_schema,
+    )
+
+
+def wrap_mcp_tools(tools: list[Any]) -> list[Any]:
+    return [_wrap_mcp(tool) for tool in tools if str(getattr(tool, "name", "")).startswith("mcp__")]

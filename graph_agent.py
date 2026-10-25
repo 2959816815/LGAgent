@@ -57,7 +57,7 @@ from model_registry import (
 )
 from web_search_tool import web_search
 
-from typing import Callable
+from typing import Any, Callable
 
 from session_cli import (
     FILE_TOOL_ACTIONS,
@@ -78,7 +78,7 @@ from session_store import (
 )
 
 from office_tools import OFFICE_TOOLS
-from approval import wrap_tools
+from approval import wrap_mcp_tools, wrap_tools
 from subagent_manager import SubagentManager
 
 # 始终加载脚本同目录下的 .env，避免从其他目录运行时找不到配置
@@ -746,6 +746,7 @@ def build_graph(
     manager=None,
     include_subagent_tools: bool = True,
     model_key: str | None = None,
+    extra_tools: list[Any] | None = None,
 ):
     """构建并编译 Agent 图：agent -> (tools -> agent)* -> END。"""
     tools = list(TOOLS)
@@ -753,7 +754,10 @@ def build_graph(
         from subagent_tools import build_subagent_tools
 
         tools = tools + build_subagent_tools(manager)
+    if extra_tools:
+        tools = tools + list(extra_tools)
     tools = wrap_tools(tools)
+    tools = wrap_mcp_tools(tools)
 
     llm_with_tools = build_llm(model_key).bind_tools(tools)
 
