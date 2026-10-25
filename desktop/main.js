@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, nativeTheme } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, nativeTheme, dialog } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const readline = require("readline");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
+const SIDECAR_TIMEOUT_MS = Number(process.env.DSH_SIDECAR_TIMEOUT_MS) || 60_000;
 let mainWindow = null;
 let backend = null;
 let config = null;
@@ -43,31 +44,64 @@ function startBackend() {
       reject(new Error("找不到 Python，请设置 DSH_PYTHON"));
       return;
     }
+    const startedAt = Date.now();
     backend = spawn(python, ["-m", "desktop_api", "--port", "0"], {
       cwd: PROJECT_ROOT,
       env: { ...process.env, DSH_DESKTOP_TOKEN: token },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const timer = setTimeout(() => reject(new Error("sidecar 启动超时")), 15000);
+    let settled = false;
+    let stderrTail = "";
+    let timer = null;
+    const settle = (error, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    timer = setTimeout(() => {
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      try {
+        backend.kill();
+      } catch {
+        // best effort
+      }
+      settle(
+        new Error(
+          `sidecar 启动超时（${seconds}s）。首次启动需要加载 Python 依赖，可能被杀毒软件或磁盘冷启动拖慢；可设置 DSH_SIDECAR_TIMEOUT_MS 增大超时后重试。`,
+        ),
+      );
+    }, SIDECAR_TIMEOUT_MS);
+
     const lines = readline.createInterface({ input: backend.stdout });
     lines.on("line", (line) => {
       if (!line.startsWith("READY ")) return;
-      clearTimeout(timer);
+      const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+      console.log(`[sidecar] ready in ${elapsed}s`);
       const { port } = JSON.parse(line.slice(6));
       config = { baseUrl: `http://127.0.0.1:${port}`, token };
-      resolve(config);
+      settle(null, config);
     });
     backend.stderr.on("data", (chunk) => {
-      console.error(`[sidecar] ${chunk.toString()}`);
+      const text = chunk.toString();
+      stderrTail = (stderrTail + text).slice(-2000);
+      console.error(`[sidecar] ${text}`);
     });
     backend.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      settle(error);
     });
     backend.on("exit", (code) => {
       if (code !== 0 && code !== null) {
         console.error(`[sidecar] exited with code ${code}`);
+      }
+      if (!settled) {
+        settle(
+          new Error(
+            `sidecar 在就绪前退出（code ${code}）${stderrTail ? `：${stderrTail.trim()}` : ""}`,
+          ),
+        );
       }
     });
   });
@@ -108,6 +142,7 @@ app.whenReady().then(() => {
   return createWindow();
 }).catch((error) => {
   console.error(error);
+  dialog.showErrorBox("LangGraph Agent 启动失败", String(error?.message ?? error));
   app.quit();
 });
 
