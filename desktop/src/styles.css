@@ -1200,3 +1200,15 @@ button {
 }
 
 
+
+.mcp-list { display: flex; flex-direction: column; gap: 10px; }
+.mcp-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.mcp-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--panel-2); }
+.mcp-head { display: flex; justify-content: space-between; gap: 8px; }
+.mcp-status { color: var(--muted); font-size: 12px; }
+.mcp-card.running .mcp-status, .mcp-card.ready .mcp-status { color: #4ade80; }
+.mcp-card.failed .mcp-status { color: #f87171; }
+.mcp-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.mcp-error { color: #fca5a5; font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
+.mcp-actions { display: flex; gap: 8px; margin-top: 8px; }
+.mcp-actions button { min-width: 58px; }

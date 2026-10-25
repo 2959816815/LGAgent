@@ -7,11 +7,14 @@ import {
   initApi,
   listAgents,
   listFiles,
+  listMcpServers,
   listModels,
   listSessions,
   patchSessionModel,
   renameSession,
+  restartMcpServer,
   resolveApproval,
+  setMcpEnabled,
   searchFiles,
   searchSessions,
   streamMessage,
@@ -22,6 +25,7 @@ import type {
   ApprovalRequest,
   Attachment,
   FileEntry,
+  McpServerStatus,
   Message,
   ModelInfo,
   SessionDetail,
@@ -30,6 +34,7 @@ import type {
   ToolEvent,
 } from "./types";
 import { markdownToHtml } from "./markdown";
+import { McpPanel } from "./components/McpPanel";
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -773,9 +778,12 @@ function RightPanel(props: {
   messages: Message[];
   agents: AgentRecord[];
   tools: ToolEvent[];
+  mcpServers: McpServerStatus[];
+  onRestartMcp: (id: string) => void;
+  onToggleMcp: (id: string, enabled: boolean) => void;
   onInsertPath: (path: string) => void;
 }) {
-  const [tab, setTab] = useState<"tasks" | "tools" | "context" | "files">("tasks");
+  const [tab, setTab] = useState<"tasks" | "tools" | "context" | "files" | "mcp">("tasks");
   const running = props.agents.filter((agent) => agent.status === "running").length;
   const windowSize = props.model?.context_window ?? 0;
   const used = estimateContext(props.messages);
@@ -789,7 +797,7 @@ function RightPanel(props: {
   return (
     <aside className="right-panel">
       <div className="tabs">
-        {(["tasks", "tools", "context", "files"] as const).map((item) => (
+        {(["tasks", "tools", "context", "files", "mcp"] as const).map((item) => (
           <button
             key={item}
             className={tab === item ? "active" : ""}
@@ -801,7 +809,9 @@ function RightPanel(props: {
                 ? "工具"
                 : item === "context"
                   ? "上下文"
-                  : "文件"}
+                  : item === "files"
+                    ? "文件"
+                    : "MCP"}
             {item === "tasks" && running > 0 ? <span className="badge">{running}</span> : null}
           </button>
         ))}
@@ -905,6 +915,13 @@ function RightPanel(props: {
       )}
 
       {tab === "files" && <FilePanel onInsert={props.onInsertPath} />}
+      {tab === "mcp" && (
+        <McpPanel
+          servers={props.mcpServers}
+          onRestart={props.onRestartMcp}
+          onToggle={props.onToggleMcp}
+        />
+      )}
     </aside>
   );
 }
@@ -937,6 +954,7 @@ export function App() {
   const [error, setError] = useState("");
   const [tools, setTools] = useState<ToolEvent[]>([]);
   const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [undoAvailable, setUndoAvailable] = useState(false);
@@ -993,6 +1011,14 @@ export function App() {
       setAgents(await listAgents());
     } catch {
       // 右栏状态不是主流程，静默失败
+    }
+  }
+
+  async function refreshMcp(): Promise<void> {
+    try {
+      setMcpServers(await listMcpServers());
+    } catch {
+      // MCP 失败不影响主界面
     }
   }
 
@@ -1192,6 +1218,12 @@ export function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    void refreshMcp();
+    const timer = window.setInterval(() => void refreshMcp(), 3000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -1236,6 +1268,9 @@ export function App() {
         messages={messages}
         agents={agents}
         tools={tools}
+        mcpServers={mcpServers}
+        onRestartMcp={(id) => void restartMcpServer(id).then(refreshMcp)}
+        onToggleMcp={(id, enabled) => void setMcpEnabled(id, enabled).then(refreshMcp)}
         onInsertPath={(path) => insertPaths([path])}
       />
     </div>

@@ -2,6 +2,7 @@ import type {
   AgentRecord,
   Attachment,
   FileEntry,
+  McpServerStatus,
   ModelInfo,
   SessionDetail,
   SessionMeta,
@@ -133,6 +134,22 @@ export async function resolveApproval(
 
 export async function undoSession(sessionId: string): Promise<{ restored: string }> {
   return request(`/api/sessions/${sessionId}/undo`, { method: "POST" });
+}
+
+export async function listMcpServers(): Promise<McpServerStatus[]> {
+  const data = await request<{ servers: McpServerStatus[] }>("/api/mcp/servers");
+  return data.servers;
+}
+
+export async function restartMcpServer(id: string): Promise<void> {
+  await request(`/api/mcp/servers/${encodeURIComponent(id)}/restart`, { method: "POST" });
+}
+
+export async function setMcpEnabled(id: string, enabled: boolean): Promise<void> {
+  await request(`/api/mcp/servers/${encodeURIComponent(id)}/enabled`, {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
 }
 
 export interface StreamEvent {

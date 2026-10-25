@@ -82,3 +82,15 @@ export interface SessionSearchResult {
   message_index: number;
   snippet: string;
 }
+
+export interface McpServerStatus {
+  id: string;
+  name: string;
+  status: "starting" | "running" | "ready" | "failed" | "stopped" | "disabled" | string;
+  enabled: boolean;
+  permission: "auto" | "ask" | "deny" | string;
+  tool_count: number;
+  tools?: string[];
+  error?: string | null;
+  started_at?: string | null;
+}
