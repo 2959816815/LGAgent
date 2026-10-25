@@ -50,7 +50,6 @@ def build_mcp_tools(manager, server_ids: list[str] | None = None) -> list[Struct
                 continue
             specs = manager.tool_specs(server_id)
             client = manager.client_for(server_id)
-            permission = manager.permission_for(server_id)
         except Exception:
             continue
         for spec in specs:
@@ -59,6 +58,10 @@ def build_mcp_tools(manager, server_ids: list[str] | None = None) -> list[Struct
             name = f"mcp__{server_id}__{spec.name}"
             args_schema = _args_model(spec)
             description = f"[{server_id}] {spec.description or spec.name}"
+            try:
+                permission = manager.permission_for(server_id, spec)
+            except Exception:
+                permission = "ask"
 
             def call_mcp(_spec=spec, _client=client, **kwargs):
                 try:

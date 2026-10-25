@@ -235,7 +235,7 @@ class StreamingApiTests(unittest.TestCase):
         self.app = create_app(
             root=self.root,
             token="t",
-            graph_builder=lambda manager, model_key: FakeGraph(),
+            graph_builder=lambda manager, model_key, extra_tools=None: FakeGraph(),
         )
         self.client = TestClient(self.app)
         self.headers = {"X-Desktop-Token": "t"}
@@ -260,7 +260,7 @@ class StreamingApiTests(unittest.TestCase):
         app = create_app(
             root=self.root,
             token="t",
-            graph_builder=lambda manager, model_key: BlockingGraph(release),
+            graph_builder=lambda manager, model_key, extra_tools=None: BlockingGraph(release),
         )
         client = TestClient(app)
         first = client.post(
@@ -291,7 +291,7 @@ class StreamingApiTests(unittest.TestCase):
         app = create_app(
             root=self.root,
             token="t",
-            graph_builder=lambda manager, model_key: (_ for _ in ()).throw(RuntimeError("boom")),
+            graph_builder=lambda manager, model_key, extra_tools=None: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         client = TestClient(app)
         session = client.post(

@@ -17,6 +17,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from graph_agent import SYSTEM_PROMPT, build_graph
 from approval import ApprovalBroker, UndoEmpty, UndoEntry, set_current as set_approval_broker, undo_last
+from mcp_client import McpError
+from mcp_manager import McpManager, McpManagerError
+from mcp_tools import build_mcp_tools
 from model_registry import (
     ModelConfigError,
     get_profile,
@@ -90,9 +93,11 @@ def create_app(
     root: Path,
     token: str,
     graph_builder=build_graph,
+    mcp_manager=None,
 ) -> FastAPI:
     store = SessionStore(root / ".sessions")
     manager = SubagentManager(project_root=root)
+    mcp = mcp_manager if mcp_manager is not None else McpManager(root)
 
     class RunState:
         def __init__(self, run_id: str, session_id: str):
@@ -126,7 +131,12 @@ def create_app(
             )
             run.broker = broker
             set_approval_broker(broker)
-            graph = graph_builder(manager, model_key=key)
+            extra_tools = []
+            try:
+                extra_tools = build_mcp_tools(mcp, mcp.enabled_ids())
+            except Exception:
+                extra_tools = []
+            graph = graph_builder(manager, model_key=key, extra_tools=extra_tools)
             messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
             final_messages = messages
             for mode, payload in graph.stream(
@@ -490,6 +500,59 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"restored": str(path)}
 
+    @app.get("/api/mcp/servers", dependencies=[Depends(require_token)])
+    def mcp_servers() -> dict:
+        def item_json(item) -> dict:
+            return {
+                "id": item.id,
+                "name": item.name,
+                "enabled": item.enabled,
+                "status": item.status,
+                "permission": item.permission,
+                "tool_count": item.tool_count,
+                "tools": item.tools,
+                "last_error": item.last_error,
+            }
+
+        try:
+            return {"servers": [item_json(item) for item in mcp.list_servers()]}
+        except (McpError, McpManagerError) as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/mcp/servers/{server_id}/restart", dependencies=[Depends(require_token)])
+    def restart_mcp(server_id: str) -> dict:
+        try:
+            status = mcp.restart(server_id)
+        except (McpError, McpManagerError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"server": {
+            "id": status.id,
+            "name": status.name,
+            "enabled": status.enabled,
+            "status": status.status,
+            "permission": status.permission,
+            "tool_count": status.tool_count,
+            "tools": status.tools,
+            "last_error": status.last_error,
+        }}
+
+    @app.post("/api/mcp/servers/{server_id}/enable", dependencies=[Depends(require_token)])
+    def enable_mcp(server_id: str, payload: dict) -> dict:
+        try:
+            status = mcp.set_enabled(server_id, bool(payload.get("enabled", True)))
+        except (McpError, McpManagerError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"server": {
+            "id": status.id,
+            "name": status.name,
+            "enabled": status.enabled,
+            "status": status.status,
+            "permission": status.permission,
+            "tool_count": status.tool_count,
+            "tools": status.tools,
+            "last_error": status.last_error,
+        }}
+
     @app.get("/api/models", dependencies=[Depends(require_token)])
     def models() -> dict:
         items = []
@@ -525,6 +588,20 @@ def create_app(
                 for record in manager.list_records()
             ]
         }
+
+    @app.on_event("startup")
+    def start_mcp_servers() -> None:
+        try:
+            mcp.start_enabled()
+        except Exception:
+            pass
+
+    @app.on_event("shutdown")
+    def stop_mcp_servers() -> None:
+        try:
+            mcp.stop_all()
+        except Exception:
+            pass
 
     return app
 

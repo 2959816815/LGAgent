@@ -57,7 +57,25 @@ class McpManager:
     # ---------------------------------------------------------------- config
     def _load_config(self) -> dict:
         if not self.config_path.is_file():
-            raise McpManagerError(f"缺少 MCP 配置文件: {self.config_path.name}")
+            raw = {
+                "servers": [
+                    {
+                        "id": "playwright",
+                        "name": "浏览器（Playwright）",
+                        "enabled": True,
+                        "command": [
+                            "npx",
+                            "-y",
+                            "@playwright/mcp@latest",
+                            "--headless",
+                        ],
+                        "cwd": ".",
+                        "env": {},
+                        "permission": "ask",
+                    }
+                ]
+            }
+            return raw
         try:
             raw = json.loads(self.config_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
