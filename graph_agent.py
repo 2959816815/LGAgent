@@ -103,6 +103,8 @@ SYSTEM_PROMPT = (
     "需要读取网页正文时用 web_fetch（只支持公开 http/https 页面）；"
     "下载软件、压缩包、文档等文件时用 download_file，默认保存到 downloads/，"
     "指定 path 可换目录，覆盖已有文件必须显式 overwrite=true；"
+    "web_fetch 和 download_file 是内置工具，浏览网页/下载文件时应优先使用；"
+    "Playwright 只用于需要 JavaScript、登录态或页面交互的场景。"
     "读取文件或目录用 read_file，大文件可用 offset/max_chars 分页；"
     "CSV 用 read_csv，JSON 用 read_json。"
     "文本文件新建/覆盖用 write_file，可用 create_parents 创建父目录、encoding 指定编码；"
