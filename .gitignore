@@ -6,3 +6,5 @@ desktop/dist/
 desktop/.vite/
 .desktop-data/
 .desktop-temp/
+.playwright-cache/
+.playwright-temp/

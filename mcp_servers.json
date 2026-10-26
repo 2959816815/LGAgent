@@ -13,7 +13,12 @@
         "--isolated"
       ],
       "cwd": ".",
-      "permission": "ask"
+      "permission": "ask",
+      "env": {
+        "PLAYWRIGHT_BROWSERS_PATH": "D:\\Vibecoding\\Langgraph\\.playwright-cache",
+        "TEMP": "D:\\Vibecoding\\Langgraph\\.playwright-temp",
+        "TMP": "D:\\Vibecoding\\Langgraph\\.playwright-temp"
+      }
     },
     {
       "id": "fetch",
