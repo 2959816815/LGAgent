@@ -56,6 +56,7 @@ from model_registry import (
     resolve_selector,
 )
 from web_search_tool import web_search
+from web_tools import download_file, web_fetch
 
 from typing import Any, Callable
 
@@ -99,6 +100,9 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 SYSTEM_PROMPT = (
     "你是一个简洁、可靠的中文助手。需要实时信息、新闻或网上资料时，"
     "用 web_search 搜索，不要凭记忆编造最新事实；搜索结果不足时如实说明。"
+    "需要读取网页正文时用 web_fetch（只支持公开 http/https 页面）；"
+    "下载软件、压缩包、文档等文件时用 download_file，默认保存到 downloads/，"
+    "指定 path 可换目录，覆盖已有文件必须显式 overwrite=true；"
     "读取文件或目录用 read_file，大文件可用 offset/max_chars 分页；"
     "CSV 用 read_csv，JSON 用 read_json。"
     "文本文件新建/覆盖用 write_file，可用 create_parents 创建父目录、encoding 指定编码；"
@@ -727,6 +731,8 @@ TOOLS = [
     write_file,
     edit_file,
     web_search,
+    web_fetch,
+    download_file,
     *OFFICE_TOOLS,
 ]
 
