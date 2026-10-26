@@ -8,3 +8,4 @@ desktop/.vite/
 .desktop-temp/
 .playwright-cache/
 .playwright-temp/
+.playwright-state/

@@ -143,6 +143,8 @@ class McpManager:
                 )
 
     def restart(self, server_id: str) -> McpServerStatus:
+        # 配置可能在应用运行期间被编辑；重启时重新读取，避免继续使用旧 env/command。
+        self._raw = self._load_config()
         item = self._find(server_id)
         self._stop(server_id)
         if item.get("enabled", True):

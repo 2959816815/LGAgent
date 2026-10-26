@@ -17,6 +17,8 @@
       "permission": "ask",
       "env": {
         "PLAYWRIGHT_BROWSERS_PATH": "D:\\Vibecoding\\Langgraph\\.playwright-cache",
+        "PWTEST_SERVER_REGISTRY": "D:\\Vibecoding\\Langgraph\\.playwright-state\\b",
+        "PWTEST_DAEMON_SESSION_DIR": "D:\\Vibecoding\\Langgraph\\.playwright-state\\daemon",
         "TEMP": "D:\\Vibecoding\\Langgraph\\.playwright-temp",
         "TMP": "D:\\Vibecoding\\Langgraph\\.playwright-temp"
       }
