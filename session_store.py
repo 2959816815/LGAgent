@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Callable
 
 from langchain_core.messages import (
+    AIMessage,
     BaseMessage,
     SystemMessage,
+    ToolMessage,
     messages_from_dict,
     messages_to_dict,
 )
@@ -68,6 +70,65 @@ def clean_title(value: str, limit: int = MAX_TITLE_LENGTH) -> str:
     text = "".join(ch if ch.isprintable() else " " for ch in str(value))
     text = " ".join(text.split())
     return text[:limit] or DEFAULT_TITLE
+
+
+def sanitize_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """移除不完整的工具调用序列。
+
+    OpenAI/DeepSeek 要求每个带 tool_calls 的 assistant 消息后面紧跟
+    对应 tool_call_id 的 tool 消息。流式生成被中断、取消或工具执行失败时，
+    历史里可能只留下 assistant.tool_calls，下一次请求就会返回 400。
+    这里把这类半截序列清理掉：保留 assistant 的文本内容，去掉 tool_calls；
+    没有文本的 assistant 直接丢弃；孤立的 tool 消息也丢弃。
+    """
+    clean: list[BaseMessage] = []
+    index = 0
+    total = len(messages)
+
+    while index < total:
+        message = messages[index]
+
+        if isinstance(message, ToolMessage):
+            # 没有紧邻的 assistant.tool_calls，孤立工具结果无法发送给模型。
+            index += 1
+            continue
+
+        if isinstance(message, AIMessage) and message.tool_calls:
+            call_ids = [
+                str(call.get("id"))
+                for call in message.tool_calls
+                if call.get("id") is not None
+            ]
+            cursor = index + 1
+            tool_messages: dict[str, ToolMessage] = {}
+            while cursor < total and isinstance(messages[cursor], ToolMessage):
+                tool_message = messages[cursor]
+                tool_messages[str(tool_message.tool_call_id)] = tool_message
+                cursor += 1
+
+            complete = bool(call_ids) and all(
+                call_id in tool_messages for call_id in call_ids
+            )
+            if complete:
+                clean.append(message)
+                clean.extend(tool_messages[call_id] for call_id in call_ids)
+            elif message.content:
+                clean.append(
+                    AIMessage(
+                        content=message.content,
+                        additional_kwargs=message.additional_kwargs,
+                        response_metadata=message.response_metadata,
+                        id=message.id,
+                        name=message.name,
+                    )
+                )
+            index = cursor
+            continue
+
+        clean.append(message)
+        index += 1
+
+    return clean
 
 
 class SessionStore:
@@ -146,7 +207,10 @@ class SessionStore:
         session.updated_at = _iso(now)
         if not session.created_at:
             session.created_at = session.updated_at
-        messages = [m for m in session.messages if not isinstance(m, SystemMessage)]
+        messages = sanitize_messages(
+            [m for m in session.messages if not isinstance(m, SystemMessage)]
+        )
+        session.messages = messages
         payload = {
             "schema_version": SCHEMA_VERSION,
             "id": session.id,
@@ -180,7 +244,7 @@ class SessionStore:
             title = clean_title(raw["title"])
             created_at = str(raw["created_at"])
             updated_at = str(raw["updated_at"])
-            messages = messages_from_dict(raw["messages"])
+            messages = sanitize_messages(messages_from_dict(raw["messages"]))
             if not isinstance(messages, list):
                 raise ValueError("messages 不是列表")
             model_key = raw.get("model_key")

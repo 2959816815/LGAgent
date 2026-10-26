@@ -77,6 +77,50 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(loaded.messages[2].tool_call_id, "call-1")
         self.assertEqual(loaded.updated_at, session.updated_at)
 
+    def test_dangling_tool_call_is_removed_on_save_and_load(self):
+        session = self.store.create("中断")
+        session.messages = [
+            HumanMessage(content="浏览网页"),
+            AIMessage(
+                content="我来试试。",
+                tool_calls=[{"name": "web_fetch", "args": {"url": "https://example.com"}, "id": "call-x"}],
+            ),
+            HumanMessage(content="继续"),
+        ]
+        self.store.save(session)
+        loaded = self.store.load(session.id)
+        self.assertEqual([m.type for m in loaded.messages], ["human", "ai", "human"])
+        self.assertEqual(loaded.messages[1].content, "我来试试。")
+        self.assertEqual(loaded.messages[1].tool_calls, [])
+
+    def test_orphan_tool_message_is_removed(self):
+        session = self.store.create("孤立工具")
+        session.messages = [
+            HumanMessage(content="你好"),
+            ToolMessage(content="工具结果", tool_call_id="call-none"),
+        ]
+        self.store.save(session)
+        loaded = self.store.load(session.id)
+        self.assertEqual([m.type for m in loaded.messages], ["human"])
+
+    def test_incomplete_multi_tool_call_is_removed(self):
+        session = self.store.create("多工具")
+        session.messages = [
+            HumanMessage(content="做两件事"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "a", "args": {}, "id": "call-a"},
+                    {"name": "b", "args": {}, "id": "call-b"},
+                ],
+            ),
+            ToolMessage(content="a ok", tool_call_id="call-a"),
+            HumanMessage(content="算了"),
+        ]
+        self.store.save(session)
+        loaded = self.store.load(session.id)
+        self.assertEqual([m.type for m in loaded.messages], ["human", "human"])
+
     def test_system_message_not_persisted(self):
         session = self.store.create()
         session.messages = [SystemMessage(content="旧系统提示"), HumanMessage(content="你好")]
