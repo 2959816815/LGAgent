@@ -27,8 +27,29 @@
       "id": "fetch",
       "name": "Fetch",
       "enabled": false,
-      "command": ["uvx", "mcp-server-fetch"],
+      "command": [
+        "uvx",
+        "mcp-server-fetch"
+      ],
       "cwd": ".",
+      "permission": "ask"
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "enabled": true,
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "cwd": ".",
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}",
+        "npm_config_cache": "D:\\Vibecoding\\Langgraph\\.npm-cache",
+        "NPM_CONFIG_CACHE": "D:\\Vibecoding\\Langgraph\\.npm-cache",
+        "NODE_OPTIONS": "--use-system-ca"
+      },
       "permission": "ask"
     }
   ]

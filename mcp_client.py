@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import queue
 import subprocess
 import threading
@@ -136,8 +137,15 @@ class StdioMcpClient:
         )
         child_env.update(self._env)
 
+        # Windows 上 npx/uvx 通常是 .cmd/.bat 包装脚本，直接 Popen("npx")
+        # 会报 WinError 2；先按 PATH 解析成真实可执行文件。
+        command = list(self._command)
+        resolved = shutil.which(command[0])
+        if resolved:
+            command[0] = resolved
+
         self._proc = subprocess.Popen(
-            self._command,
+            command,
             cwd=str(self._cwd),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
