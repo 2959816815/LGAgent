@@ -522,6 +522,70 @@ def create_app(
         except (McpError, McpManagerError) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    @app.get("/api/mcp/catalog", dependencies=[Depends(require_token)])
+    def mcp_catalog() -> dict:
+        try:
+            return {"presets": mcp.catalog()}
+        except (McpError, McpManagerError) as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/api/mcp/servers", dependencies=[Depends(require_token)])
+    def add_mcp_server(payload: dict) -> dict:
+        preset_id = str(payload.get("preset_id") or "").strip()
+        if not preset_id:
+            raise HTTPException(status_code=400, detail="缺少 preset_id")
+        env_values = payload.get("env") or {}
+        if not isinstance(env_values, dict):
+            raise HTTPException(status_code=400, detail="env 必须是对象")
+        try:
+            status = mcp.add_server(
+                preset_id,
+                env_values={str(k): str(v) for k, v in env_values.items()},
+                permission=payload.get("permission"),
+                name=payload.get("name"),
+            )
+        except (McpError, McpManagerError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "server": {
+                "id": status.id,
+                "name": status.name,
+                "enabled": status.enabled,
+                "status": status.status,
+                "permission": status.permission,
+                "tool_count": status.tool_count,
+                "tools": status.tools,
+                "last_error": status.last_error,
+            }
+        }
+
+    @app.delete("/api/mcp/servers/{server_id}", dependencies=[Depends(require_token)])
+    def remove_mcp_server(server_id: str) -> dict:
+        try:
+            mcp.remove_server(server_id)
+        except (McpError, McpManagerError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"removed": server_id}
+
+    @app.post("/api/mcp/servers/{server_id}/permission", dependencies=[Depends(require_token)])
+    def set_mcp_permission(server_id: str, payload: dict) -> dict:
+        try:
+            status = mcp.set_permission(server_id, str(payload.get("permission") or ""))
+        except (McpError, McpManagerError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "server": {
+                "id": status.id,
+                "name": status.name,
+                "enabled": status.enabled,
+                "status": status.status,
+                "permission": status.permission,
+                "tool_count": status.tool_count,
+                "tools": status.tools,
+                "last_error": status.last_error,
+            }
+        }
+
     @app.post("/api/mcp/servers/{server_id}/restart", dependencies=[Depends(require_token)])
     def restart_mcp(server_id: str) -> dict:
         try:

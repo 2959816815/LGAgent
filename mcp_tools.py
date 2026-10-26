@@ -53,8 +53,6 @@ def build_mcp_tools(manager, server_ids: list[str] | None = None) -> list[Struct
         except Exception:
             continue
         for spec in specs:
-            if spec.read_only:
-                continue
             name = f"mcp__{server_id}__{spec.name}"
             args_schema = _args_model(spec)
             description = f"[{server_id}] {spec.description or spec.name}"

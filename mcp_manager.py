@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mcp_catalog import catalog_items, get_preset
 from mcp_client import McpError, McpToolSpec, StdioMcpClient
 
 
@@ -36,13 +38,15 @@ class ManagedProcess:
 
 
 _VALID_PERMISSIONS = {"auto", "ask", "deny"}
+_ENV_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_SERVER_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class McpManager:
     def __init__(
         self,
         root: Path,
-        max_tools: int = 32,
+        max_tools: int = 64,
         startup_timeout: float = 30.0,
         tool_timeout: float = 60.0,
     ) -> None:
@@ -165,6 +169,110 @@ class McpManager:
         self.refresh()
         return [self._status(item) for item in self._servers()]
 
+    def catalog(self) -> list[dict]:
+        """返回内置服务目录，并标记当前配置中是否已存在。"""
+        installed = {str(item.get("id")) for item in self._servers()}
+        result: list[dict] = []
+        for item in catalog_items():
+            entry = dict(item)
+            entry["installed"] = item["id"] in installed
+            result.append(entry)
+        return result
+
+    def add_server(
+        self,
+        preset_id: str,
+        env_values: dict[str, str] | None = None,
+        permission: str | None = None,
+        server_id: str | None = None,
+        name: str | None = None,
+    ) -> McpServerStatus:
+        """按目录模板新增一个 server，并立即尝试启动。"""
+        try:
+            preset = get_preset(preset_id)
+        except KeyError as exc:
+            raise McpManagerError(f"未知的 MCP 模板: {preset_id}") from exc
+
+        target_id = str(server_id or preset["id"]).strip().lower()
+        if not _SERVER_ID.fullmatch(target_id):
+            raise McpManagerError("MCP server id 只能包含小写字母、数字、下划线和短横线")
+        if any(item.get("id") == target_id for item in self._servers()):
+            raise McpManagerError(f"MCP server 已存在: {target_id}")
+
+        values = {str(k): str(v) for k, v in (env_values or {}).items()}
+        fields = preset.get("fields") or []
+        env: dict[str, str] = {str(k): str(v) for k, v in (preset.get("env") or {}).items()}
+        for field in fields:
+            key = str(field["key"])
+            value = values.get(key, str(field.get("default") or "")).strip()
+            if field.get("required") and not value:
+                raise McpManagerError(f"缺少必填配置: {field.get('label') or key}")
+            env[key] = value
+
+        # 允许覆盖模板 env 中非表单字段（例如临时目录）。
+        for key, value in values.items():
+            if key not in env:
+                env[key] = value
+
+        for key, value in list(env.items()):
+            env[key] = self._expand_env(value, f"{target_id}.{key}")
+
+        chosen_permission = str(permission or preset.get("permission") or "ask")
+        if chosen_permission not in _VALID_PERMISSIONS:
+            raise McpManagerError("permission 只能是 auto、ask 或 deny")
+
+        item = {
+            "id": target_id,
+            "name": str(name or preset.get("name") or target_id),
+            "enabled": True,
+            "command": [self._expand_env(str(part), f"{target_id}.command") for part in preset["command"]],
+            "cwd": str(preset.get("cwd") or "."),
+            "env": env,
+            "permission": chosen_permission,
+        }
+        self._raw.setdefault("servers", []).append(item)
+        self._save_config()
+        try:
+            self._launch(target_id)
+        except (McpError, McpManagerError) as exc:
+            # 配置已保留，让用户能在面板里看到失败原因并修改配置后重试。
+            self._set_failure(target_id, f"MCP 启动失败: {exc}")
+        return self._status(item)
+
+    def remove_server(self, server_id: str) -> None:
+        self._find(server_id)
+        self._stop(server_id)
+        self._raw["servers"] = [
+            item for item in self._servers() if item.get("id") != server_id
+        ]
+        self._save_config()
+
+    def set_permission(self, server_id: str, permission: str) -> McpServerStatus:
+        if permission not in _VALID_PERMISSIONS:
+            raise McpManagerError("permission 只能是 auto、ask 或 deny")
+        item = self._find(server_id)
+        item["permission"] = permission
+        self._save_config()
+        return self._status(item)
+
+    @staticmethod
+    def _expand_env(value: str, context: str) -> str:
+        missing: list[str] = []
+
+        def replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            resolved = os.environ.get(key)
+            if resolved is None:
+                missing.append(key)
+                return match.group(0)
+            return resolved
+
+        expanded = _ENV_PLACEHOLDER.sub(replace, value)
+        if missing:
+            names = "、".join(dict.fromkeys(missing))
+            raise McpManagerError(f"{context} 缺少环境变量: {names}")
+        return expanded
+
     def enabled_ids(self) -> list[str]:
         """返回当前启用且可参与 Agent 的工具服务器 id。"""
         return [status.id for status in self.list_servers() if status.enabled]
@@ -206,11 +314,17 @@ class McpManager:
         if existing is not None:
             self._stop(server_id)
 
-        command = [str(part) for part in item["command"]]
-        cwd = (self.root / str(item.get("cwd") or ".")).resolve()
+        command = [
+            self._expand_env(str(part), f"{server_id}.command")
+            for part in item["command"]
+        ]
+        cwd = (self.root / self._expand_env(str(item.get("cwd") or "."), f"{server_id}.cwd")).resolve()
         if command and ("/" in command[0] or "\\" in command[0]):
             command[0] = str((cwd / command[0]).resolve())
-        env = item.get("env") or {}
+        env = {
+            str(key): self._expand_env(str(value), f"{server_id}.env.{key}")
+            for key, value in (item.get("env") or {}).items()
+        }
         client = StdioMcpClient(
             command,
             cwd=cwd,

@@ -2,6 +2,7 @@ import type {
   AgentRecord,
   Attachment,
   FileEntry,
+  McpCatalogItem,
   McpServerStatus,
   ModelInfo,
   SessionDetail,
@@ -139,6 +140,29 @@ export async function undoSession(sessionId: string): Promise<{ restored: string
 export async function listMcpServers(): Promise<McpServerStatus[]> {
   const data = await request<{ servers: McpServerStatus[] }>("/api/mcp/servers");
   return data.servers;
+}
+
+export async function listMcpCatalog(): Promise<McpCatalogItem[]> {
+  const data = await request<{ presets: McpCatalogItem[] }>("/api/mcp/catalog");
+  return data.presets;
+}
+
+export async function addMcpServer(presetId: string, env: Record<string, string>): Promise<void> {
+  await request("/api/mcp/servers", {
+    method: "POST",
+    body: JSON.stringify({ preset_id: presetId, env }),
+  });
+}
+
+export async function removeMcpServer(id: string): Promise<void> {
+  await request(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function setMcpPermission(id: string, permission: string): Promise<void> {
+  await request(`/api/mcp/servers/${encodeURIComponent(id)}/permission`, {
+    method: "POST",
+    body: JSON.stringify({ permission }),
+  });
 }
 
 export async function restartMcpServer(id: string): Promise<void> {

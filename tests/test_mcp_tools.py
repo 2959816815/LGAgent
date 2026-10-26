@@ -51,22 +51,25 @@ class McpToolTests(unittest.TestCase):
 
     def test_tool_name_and_schema(self) -> None:
         tools = build_mcp_tools(FakeManager(), ["demo"])
-        self.assertEqual(len(tools), 1)
-        tool = tools[0]
-        self.assertEqual(tool.name, "mcp__demo__echo")
+        by_name = {tool.name: tool for tool in tools}
+        self.assertEqual(set(by_name), {"mcp__demo__echo", "mcp__demo__read"})
+        tool = by_name["mcp__demo__echo"]
         self.assertIn("demo", tool.description)
         self.assertIn("text", tool.args_schema.model_fields)
 
-    def test_read_only_not_exposed(self) -> None:
+    def test_read_only_is_exposed_as_auto(self) -> None:
         manager = FakeManager()
         manager.tool_specs = lambda server_id: [
             McpToolSpec("read", "read only", {"type": "object"}, True)
         ]
-        self.assertEqual(build_mcp_tools(manager, ["demo"]), [])
+        tools = build_mcp_tools(manager, ["demo"])
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0].name, "mcp__demo__read")
+        self.assertEqual(tools[0].metadata["permission"], "auto")
 
     def test_call_forwards_to_client(self) -> None:
         manager = FakeManager()
-        tool = build_mcp_tools(manager, ["demo"])[0]
+        tool = next(t for t in build_mcp_tools(manager, ["demo"]) if t.name.endswith("echo"))
         result = tool.invoke({"text": "hi"})
         self.assertEqual(result, "mcp-result")
         self.assertEqual(manager.client.calls, [("echo", {"text": "hi"})])
@@ -75,7 +78,7 @@ class McpToolTests(unittest.TestCase):
         manager = FakeManager(permission="ask")
         broker = FakeBroker()
         approval.set_current(broker)
-        tool = build_mcp_tools(manager, ["demo"])[0]
+        tool = next(t for t in build_mcp_tools(manager, ["demo"]) if t.name.endswith("echo"))
         wrapped = approval.wrap_mcp_tools([tool])[0]
         result = wrapped.invoke({"text": "hi"})
         self.assertEqual(result, "mcp-result")
@@ -87,8 +90,9 @@ class McpToolTests(unittest.TestCase):
 
         native = Native()
         manager = FakeManager()
-        tool = build_mcp_tools(manager, ["demo"])[0]
-        wrapped = approval.wrap_mcp_tools([native, tool])
+        tools = build_mcp_tools(manager, ["demo"])
+        echo = next(t for t in tools if t.name.endswith("echo"))
+        wrapped = approval.wrap_mcp_tools([native, echo])
         self.assertIs(wrapped[0], native)
         self.assertEqual(wrapped[1].name, "mcp__demo__echo")
 

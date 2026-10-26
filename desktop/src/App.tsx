@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
+  addMcpServer,
   cancelRun,
   createSession,
   deleteSession,
@@ -7,14 +8,17 @@ import {
   initApi,
   listAgents,
   listFiles,
+  listMcpCatalog,
   listMcpServers,
   listModels,
   listSessions,
   patchSessionModel,
+  removeMcpServer,
   renameSession,
   restartMcpServer,
   resolveApproval,
   setMcpEnabled,
+  setMcpPermission,
   searchFiles,
   searchSessions,
   streamMessage,
@@ -25,6 +29,7 @@ import type {
   ApprovalRequest,
   Attachment,
   FileEntry,
+  McpCatalogItem,
   McpServerStatus,
   Message,
   ModelInfo,
@@ -779,8 +784,12 @@ function RightPanel(props: {
   agents: AgentRecord[];
   tools: ToolEvent[];
   mcpServers: McpServerStatus[];
+  mcpCatalog: McpCatalogItem[];
   onRestartMcp: (id: string) => void;
   onToggleMcp: (id: string, enabled: boolean) => void;
+  onAddMcp: (presetId: string, env: Record<string, string>) => Promise<void>;
+  onRemoveMcp: (id: string) => void;
+  onMcpPermission: (id: string, permission: string) => void;
   onInsertPath: (path: string) => void;
 }) {
   const [tab, setTab] = useState<"tasks" | "tools" | "context" | "files" | "mcp">("tasks");
@@ -918,8 +927,12 @@ function RightPanel(props: {
       {tab === "mcp" && (
         <McpPanel
           servers={props.mcpServers}
+          catalog={props.mcpCatalog}
           onRestart={props.onRestartMcp}
           onToggle={props.onToggleMcp}
+          onAdd={props.onAddMcp}
+          onRemove={props.onRemoveMcp}
+          onPermission={props.onMcpPermission}
         />
       )}
     </aside>
@@ -955,6 +968,7 @@ export function App() {
   const [tools, setTools] = useState<ToolEvent[]>([]);
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
+  const [mcpCatalog, setMcpCatalog] = useState<McpCatalogItem[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [undoAvailable, setUndoAvailable] = useState(false);
@@ -1037,10 +1051,27 @@ export function App() {
 
   async function refreshMcp(): Promise<void> {
     try {
-      setMcpServers(await listMcpServers());
+      const [servers, catalog] = await Promise.all([listMcpServers(), listMcpCatalog()]);
+      setMcpServers(servers);
+      setMcpCatalog(catalog);
     } catch {
       // MCP 失败不影响主界面
     }
+  }
+
+  async function addMcp(presetId: string, env: Record<string, string>): Promise<void> {
+    await addMcpServer(presetId, env);
+    await refreshMcp();
+  }
+
+  async function removeMcp(id: string): Promise<void> {
+    await removeMcpServer(id);
+    await refreshMcp();
+  }
+
+  async function setPermission(id: string, permission: string): Promise<void> {
+    await setMcpPermission(id, permission);
+    await refreshMcp();
   }
 
   async function renameCurrent(title: string): Promise<void> {
@@ -1295,8 +1326,14 @@ export function App() {
         agents={agents}
         tools={tools}
         mcpServers={mcpServers}
+        mcpCatalog={mcpCatalog}
         onRestartMcp={(id) => void restartMcpServer(id).then(refreshMcp)}
         onToggleMcp={(id, enabled) => void setMcpEnabled(id, enabled).then(refreshMcp)}
+        onAddMcp={addMcp}
+        onRemoveMcp={(id) => void removeMcp(id).catch((cause) => setError(errorText(cause)))}
+        onMcpPermission={(id, permission) =>
+          void setPermission(id, permission).catch((cause) => setError(errorText(cause)))
+        }
         onInsertPath={(path) => insertPaths([path])}
       />
     </div>

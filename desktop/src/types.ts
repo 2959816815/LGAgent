@@ -94,3 +94,24 @@ export interface McpServerStatus {
   error?: string | null;
   started_at?: string | null;
 }
+
+export interface McpCatalogField {
+  key: string;
+  label: string;
+  default: string;
+  required: boolean;
+  secret: boolean;
+}
+
+export interface McpCatalogItem {
+  id: string;
+  name: string;
+  description: string;
+  command: string[];
+  cwd: string;
+  env: Record<string, string>;
+  fields: McpCatalogField[];
+  permission: "auto" | "ask" | "deny" | string;
+  docs_url?: string;
+  installed: boolean;
+}

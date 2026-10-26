@@ -227,6 +227,33 @@ class BlockingGraph:
         self.release.wait(timeout=2)
 
 
+class McpApiTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(__file__).resolve().parent.parent / f".test_mcp_api_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.client = TestClient(create_app(root=self.root, token="t"))
+        self.headers = {"X-Desktop-Token": "t"}
+
+    def test_catalog_requires_token(self):
+        self.assertEqual(self.client.get("/api/mcp/catalog").status_code, 401)
+
+    def test_catalog_contains_sqlite(self):
+        response = self.client.get("/api/mcp/catalog", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        ids = {item["id"] for item in response.json()["presets"]}
+        self.assertIn("sqlite", ids)
+        self.assertIn("github", ids)
+
+    def test_unknown_preset_is_400(self):
+        response = self.client.post(
+            "/api/mcp/servers",
+            json={"preset_id": "missing-server"},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+
+
 class StreamingApiTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(__file__).resolve().parent.parent / f".test_desktop_api_{uuid.uuid4().hex[:8]}"

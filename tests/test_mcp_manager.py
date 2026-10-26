@@ -144,6 +144,46 @@ class McpManagerTests(unittest.TestCase):
         with self.assertRaises(McpManagerError):
             manager.client_for("demo")
 
+    def test_catalog_contains_sqlite(self) -> None:
+        self._config([])
+        manager = self._manager()
+        items = {item["id"]: item for item in manager.catalog()}
+        self.assertIn("sqlite", items)
+        self.assertIn("github", items)
+        self.assertFalse(items["sqlite"]["installed"])
+
+    def test_add_sqlite_server(self) -> None:
+        self._config([])
+        manager = self._manager()
+        status = manager.add_server(
+            "sqlite",
+            env_values={"MCP_SQLITE_DB": str(self.root / "agent.db")},
+        )
+        self.assertEqual(status.status, "running")
+        names = [spec.name for spec in manager.tool_specs("sqlite")]
+        self.assertIn("query", names)
+        self.assertIn("sqlite", manager.enabled_ids())
+
+    def test_add_requires_github_token(self) -> None:
+        self._config([])
+        manager = self._manager()
+        old = __import__("os").environ.pop("GITHUB_PERSONAL_ACCESS_TOKEN", None)
+        try:
+            with self.assertRaises(McpManagerError):
+                manager.add_server("github")
+        finally:
+            if old is not None:
+                __import__("os").environ["GITHUB_PERSONAL_ACCESS_TOKEN"] = old
+        self.assertEqual(manager.list_servers(), [])
+
+    def test_remove_and_permission(self) -> None:
+        self._config([self._fake()])
+        manager = self._manager()
+        manager.start_enabled()
+        self.assertEqual(manager.set_permission("demo", "deny").permission, "deny")
+        manager.remove_server("demo")
+        self.assertEqual(manager.list_servers(), [])
+
 
 if __name__ == "__main__":
     unittest.main()
