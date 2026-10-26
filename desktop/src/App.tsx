@@ -960,6 +960,8 @@ export function App() {
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const streamSeq = useRef(0);
+  const viewSeq = useRef(0);
 
   const currentModel =
     models.find((item) => item.key === detail?.model_key) ?? models[0];
@@ -970,8 +972,22 @@ export function App() {
     return list;
   }
 
+  function cancelActiveStream(): void {
+    streamSeq.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+    setStreamText("");
+    setRunId(null);
+    setTools([]);
+    setApproval(null);
+  }
+
   async function selectSession(id: string): Promise<void> {
+    const seq = ++viewSeq.current;
+    cancelActiveStream();
     const data = await getSession(id);
+    if (seq !== viewSeq.current) return;
     setActiveId(id);
     setDetail(data);
     setMessages(data.messages);
@@ -979,11 +995,15 @@ export function App() {
     setError("");
     setAttachments([]);
     setApproval(null);
+    setTools([]);
     setUndoAvailable(false);
   }
 
   async function newSession(): Promise<void> {
+    const seq = ++viewSeq.current;
+    cancelActiveStream();
     const created = await createSession("新会话", detail?.model_key);
+    if (seq !== viewSeq.current) return;
     setSessions((prev) => [created, ...prev]);
     setActiveId(created.id);
     setDetail(created);
@@ -992,6 +1012,7 @@ export function App() {
     setError("");
     setAttachments([]);
     setApproval(null);
+    setTools([]);
     setUndoAvailable(false);
   }
 
@@ -1078,12 +1099,14 @@ export function App() {
 
   async function send(): Promise<void> {
     const text = input.trim();
-    if (!detail || (!text && attachments.length === 0) || streaming) return;
+    if (!detail || (!text && attachments.length === 0) || streaming || abortRef.current) return;
     if (attachments.length > 0 && !currentModel?.supports_vision) {
       setError("当前模型不支持图片，请切换到千问 VL");
       return;
     }
     const outgoing = attachments;
+    const sessionId = detail.id;
+    const seq = ++streamSeq.current;
     setInput("");
     setAttachments([]);
     setError("");
@@ -1094,7 +1117,8 @@ export function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      for await (const event of streamMessage(detail.id, text, controller.signal, outgoing)) {
+      for await (const event of streamMessage(sessionId, text, controller.signal, outgoing)) {
+        if (seq !== streamSeq.current) break;
         if (event.event === "token") {
           const id = String(event.data.run_id ?? "");
           if (id) setRunId(id);
@@ -1129,16 +1153,18 @@ export function App() {
         }
       }
     } catch (cause) {
-      if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+      if (seq === streamSeq.current && !(cause instanceof DOMException && cause.name === "AbortError")) {
         setError(errorText(cause));
       }
     } finally {
+      if (seq !== streamSeq.current) return;
       setStreaming(false);
       setStreamText("");
       setRunId(null);
       abortRef.current = null;
       try {
-        const updated = await getSession(detail.id);
+        const updated = await getSession(sessionId);
+        if (seq !== streamSeq.current) return;
         setDetail(updated);
         setMessages(updated.messages);
       } catch {

@@ -205,11 +205,13 @@ def create_app(
             emit(run, "error", {"run_id": run.run_id, "code": "run_error", "message": str(exc)})
         finally:
             set_approval_broker(None)
-            emit(run, "done", {"run_id": run.run_id, "interrupted": run.cancel.is_set()})
-            run.events.put(None)
+            # 先释放会话锁，再发送 done。否则客户端收到 done 后立刻发下一条消息时，
+            # active_runs 可能还没清理，会错误返回“已有回复正在生成”。
             with runs_lock:
                 if active_runs.get(session.id) == run.run_id:
                     active_runs.pop(session.id, None)
+            emit(run, "done", {"run_id": run.run_id, "interrupted": run.cancel.is_set()})
+            run.events.put(None)
 
     app = FastAPI(title="LangGraph Agent Desktop API")
     app.add_middleware(
@@ -466,8 +468,9 @@ def create_app(
                     run.broker.cancel_all()
                 with runs_lock:
                     runs.pop(run.run_id, None)
-                    if active_runs.get(session_id) == run.run_id:
-                        active_runs.pop(session_id, None)
+                    # 不要在这里提前移除 active_runs：客户端断开时 run_graph 可能还在
+                    # 执行，提前放行会让同一会话出现两个并发写入。active_runs 统一由
+                    # run_graph 的 finally 在真正结束时清理。
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 

@@ -255,6 +255,30 @@ class StreamingApiTests(unittest.TestCase):
         self.assertIn('"text": "你"', body)
         self.assertIn("event: done", body)
 
+    def test_session_unlocks_before_done_stream_closes(self):
+        """收到 done 后立刻发下一条消息，不应再报“已有回复正在生成”。"""
+        session = self.client.post(
+            "/api/sessions", json={"title": "连续发送"}, headers=self.headers
+        ).json()
+        with self.client.stream(
+            "POST",
+            f"/api/sessions/{session['id']}/messages",
+            json={"text": "第一条"},
+            headers=self.headers,
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            for line in response.iter_lines():
+                if line.startswith("event: done"):
+                    break
+            # 故意不关闭流，模拟前端收到 done 后马上发下一条。
+            second = self.client.post(
+                f"/api/sessions/{session['id']}/messages",
+                json={"text": "第二条"},
+                headers=self.headers,
+            )
+            self.assertEqual(second.status_code, 200, second.text)
+            self.assertIn("event: done", second.text)
+
     def test_another_session_is_not_blocked_by_active_run(self):
         release = threading.Event()
         app = create_app(
