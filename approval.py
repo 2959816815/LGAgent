@@ -328,4 +328,10 @@ def _wrap_mcp(tool: Any) -> Any:
 
 
 def wrap_mcp_tools(tools: list[Any]) -> list[Any]:
-    return [_wrap_mcp(tool) for tool in tools if str(getattr(tool, "name", "")).startswith("mcp__")]
+    """只包装 MCP 工具，保留其他原生工具。"""
+    return [
+        _wrap_mcp(tool)
+        if str(getattr(tool, "name", "")).startswith("mcp__")
+        else tool
+        for tool in tools
+    ]

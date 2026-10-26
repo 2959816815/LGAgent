@@ -81,6 +81,17 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(result, "mcp-result")
         self.assertEqual(broker.called[0], "mcp__demo__echo")
 
+    def test_wrap_mcp_keeps_native_tools(self) -> None:
+        class Native:
+            name = "web_fetch"
+
+        native = Native()
+        manager = FakeManager()
+        tool = build_mcp_tools(manager, ["demo"])[0]
+        wrapped = approval.wrap_mcp_tools([native, tool])
+        self.assertIs(wrapped[0], native)
+        self.assertEqual(wrapped[1].name, "mcp__demo__echo")
+
 
 if __name__ == "__main__":
     unittest.main()

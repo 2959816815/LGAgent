@@ -8,8 +8,9 @@
         "node",
         "desktop/node_modules/@playwright/mcp/cli.js",
         "--browser",
-        "chrome",
+        "chromium",
         "--headless",
+        "--no-sandbox",
         "--isolated"
       ],
       "cwd": ".",
