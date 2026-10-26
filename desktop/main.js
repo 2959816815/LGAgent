@@ -124,13 +124,18 @@ async function createWindow() {
   console.log("[main] createWindow: starting backend");
   await startBackend();
   console.log("[main] createWindow: backend ready, creating window");
-  const area = screen.getPrimaryDisplay().workAreaSize;
+  const area = screen.getPrimaryDisplay().workArea;
+  const width = Math.min(960, area.width - 80);
+  const height = Math.min(820, area.height - 80);
+  const x = Math.round(area.x + (area.width - width) / 2);
+  const y = Math.round(area.y + (area.height - height) / 2);
   mainWindow = new BrowserWindow({
-    width: Math.min(960, area.width - 80),
-    height: Math.min(820, area.height - 80),
+    width,
+    height,
+    x,
+    y,
     minWidth: 880,
     minHeight: 600,
-    center: true,
     autoHideMenuBar: true,
     backgroundColor: "#0e0e0e",
     webPreferences: {
@@ -140,10 +145,15 @@ async function createWindow() {
       sandbox: true,
     },
   });
-  mainWindow.center();
   mainWindow.setMenuBarVisibility(false);
   console.log("[main] createWindow: window created, loading URL");
   await mainWindow.loadURL("http://localhost:5173");
+  // Some Windows/DPI combinations can place a "centered" window off-screen
+  // (observed at -25600,-25600). Re-assert visible bounds after load.
+  mainWindow.setBounds({ x, y, width, height });
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
   console.log("[main] createWindow: URL loaded");
 }
 
