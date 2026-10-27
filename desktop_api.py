@@ -94,10 +94,12 @@ def create_app(
     token: str,
     graph_builder=build_graph,
     mcp_manager=None,
+    data_root: Path | None = None,
 ) -> FastAPI:
-    store = SessionStore(root / ".sessions")
+    data_dir = Path(data_root or os.getenv("DSH_DATA_DIR") or root)
+    store = SessionStore(data_dir / ".sessions")
     manager = SubagentManager(project_root=root)
-    mcp = mcp_manager if mcp_manager is not None else McpManager(root)
+    mcp = mcp_manager if mcp_manager is not None else McpManager(data_dir)
 
     class RunState:
         def __init__(self, run_id: str, session_id: str):
@@ -673,7 +675,8 @@ def create_app(
     return app
 
 
-app = create_app(BASE_DIR, DEFAULT_TOKEN)
+data_root = Path(os.getenv("DSH_DATA_DIR", str(BASE_DIR)))
+app = create_app(BASE_DIR, DEFAULT_TOKEN, data_root=data_root)
 
 
 def main() -> None:

@@ -45,6 +45,30 @@ class SessionModelKeyTests(unittest.TestCase):
         self.assertEqual(meta.model_key, "qwen")
 
 
+class DesktopDataDirTests(unittest.TestCase):
+    def test_data_root_controls_sessions_and_mcp(self):
+        root = Path(__file__).resolve().parent.parent / f".test_desktop_api_{uuid.uuid4().hex[:8]}"
+        root.mkdir()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        data = root / "userdata"
+        data.mkdir()
+        captured = {}
+
+        class FakeStore:
+            def __init__(self, path):
+                captured["sessions"] = Path(path)
+
+        class FakeMcp:
+            def __init__(self, path):
+                captured["mcp"] = Path(path)
+
+        with patch("desktop_api.SessionStore", FakeStore), patch("desktop_api.McpManager", FakeMcp):
+            create_app(root=root, token="t", graph_builder=lambda: None, data_root=data)
+
+        self.assertEqual(captured["sessions"], data / ".sessions")
+        self.assertEqual(captured["mcp"], data)
+
+
 class DesktopSessionApiTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(__file__).resolve().parent.parent / f".test_desktop_api_{uuid.uuid4().hex[:8]}"
