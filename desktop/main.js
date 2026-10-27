@@ -33,17 +33,32 @@ let backend = null;
 let config = null;
 let settingsStore = null;
 
-function resolveUserData() {
-  const roaming = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-  const preferred = path.join(roaming, "langgraph-agent");
+function canWriteDirectory(directory) {
   try {
-    fs.mkdirSync(preferred, { recursive: true });
-    return preferred;
+    fs.mkdirSync(directory, { recursive: true });
+    const probe = path.join(directory, `.write-test-${process.pid}`);
+    fs.writeFileSync(probe, "ok", "utf8");
+    fs.unlinkSync(probe);
+    return true;
   } catch {
-    const fallback = path.join(app.getPath("temp"), "langgraph-agent");
-    fs.mkdirSync(fallback, { recursive: true });
-    return fallback;
+    return false;
   }
+}
+
+function resolveUserData() {
+  const candidates = [
+    process.env.LANGGRAPH_DATA_DIR,
+    path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "langgraph-agent"),
+    path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "langgraph-agent"),
+    path.join(path.dirname(process.execPath), "data"),
+    path.join(os.tmpdir(), "langgraph-agent"),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (canWriteDirectory(candidate)) return candidate;
+  }
+  throw new Error(
+    "找不到可写的数据目录。请设置 LANGGRAPH_DATA_DIR 指向一个当前用户可写的文件夹。",
+  );
 }
 
 app.setPath("userData", resolveUserData());
@@ -147,7 +162,7 @@ function startBackend() {
 
     const startedAt = Date.now();
     backend = spawn(invocation.command, invocation.args, {
-      cwd: app.getPath("userData"),
+      cwd: app.isPackaged ? app.getPath("userData") : PROJECT_ROOT,
       env: {
         ...process.env,
         DSH_DESKTOP_TOKEN: token,
