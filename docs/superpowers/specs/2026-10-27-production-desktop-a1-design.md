@@ -118,3 +118,16 @@ Program Files/LangGraph Agent/
 
 A2：本地服务地址、SQLite、MCP 安装、诊断包。
 A3：终端、RAG、技能、自动更新、跨平台。
+
+## 本机验收记录（2026-10-28）
+
+已在 Windows 10 x64 本机用打包后的 `release/win-unpacked` 和全新 `APPDATA` 验证：
+
+- 首次启动显示 DeepSeek 向导。
+- 错误 Key 返回明确 401 错误，向导不崩溃。
+- 正确 Key 保存后进入主界面；Key 以 `safeStorage` 密文写入 `%APPDATA%\langgraph-agent\settings.json`。
+- 发送消息收到 `deepseek-flash` 回复。
+- 关闭并重启后不再要求填写 Key，已有会话仍存在。
+- `%APPDATA%\langgraph-agent\logs\sidecar.log` 中未出现 API Key 明文。
+
+尚未完成：干净 Windows 虚拟机验收、卸载程序实测。安装包内快捷方式由应用首次启动时补写（带 `--no-sandbox`），仍建议在目标机器上复核。
