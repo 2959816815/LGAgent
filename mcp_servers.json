@@ -51,6 +51,20 @@
         "NODE_OPTIONS": "--use-system-ca"
       },
       "permission": "ask"
+    },
+    {
+      "id": "sqlite",
+      "name": "SQLite 数据库",
+      "enabled": true,
+      "command": [
+        "D:\\Anaconda3\\envs\\rag\\python.exe",
+        "D:\\Vibecoding\\Langgraph\\mcp_sqlite_server.py"
+      ],
+      "cwd": ".",
+      "env": {
+        "MCP_SQLITE_DB": "data/agent.db"
+      },
+      "permission": "ask"
     }
   ]
 }
