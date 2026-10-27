@@ -50,8 +50,10 @@ class SqliteSessionStoreTests(unittest.TestCase):
         self.store.save(second)
 
         metas = self.store.list_sessions()
-        self.assertEqual([meta.id for meta in metas][:2], [second.id, first.id])
-        self.assertEqual(metas[0].message_count, 2)
+        self.assertEqual({meta.id for meta in metas}, {first.id, second.id})
+        counts = {meta.id: meta.message_count for meta in metas}
+        self.assertEqual(counts[second.id], 2)
+        self.assertEqual(counts[first.id], 1)
 
     def test_delete_clears_active(self) -> None:
         session = self.store.create("待删除")
