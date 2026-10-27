@@ -1,0 +1,25 @@
+appId: com.langgraph.agent
+productName: LangGraph Agent
+directories:
+  output: ../release
+  buildResources: build
+files:
+  - main.js
+  - preload.js
+  - settings.cjs
+  - package.json
+  - dist/**/*
+extraResources:
+  - from: ../dist-sidecar/langgraph-sidecar
+    to: sidecar
+asar: true
+win:
+  target:
+    - nsis
+  artifactName: LangGraph-Agent-Setup-${version}.exe
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: false
+  createStartMenuShortcut: false
+  include: build/installer.nsh

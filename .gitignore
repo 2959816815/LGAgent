@@ -9,3 +9,17 @@ desktop/.vite/
 .playwright-cache/
 .playwright-temp/
 .playwright-state/
+.eb-cache/
+.build-temp/
+.npm-cache/
+.sidecar-test/
+.install-test/
+.test-profile/
+dist-sidecar/
+release/
+/build/
+!desktop/build/
+!desktop/build/**
+*.spec
+rebuild.log
+data/

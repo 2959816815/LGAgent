@@ -6,6 +6,7 @@ const {
   nativeTheme,
   dialog,
   safeStorage,
+  shell,
 } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
@@ -36,6 +37,50 @@ function resolveUserData() {
 app.setPath("userData", resolveUserData());
 app.setPath("sessionData", app.getPath("userData"));
 nativeTheme.themeSource = "dark";
+// The Chromium sandbox can fail inside Windows job objects before the first
+// window appears. appendSwitch() is too late at that point, so relaunch the
+// packaged app once with the switch on the real command line.
+if (app.isPackaged && process.platform === "win32" && !process.argv.includes("--no-sandbox")) {
+  app.relaunch({ args: ["--no-sandbox", ...process.argv.slice(1)] });
+  app.exit(0);
+}
+// Electron's Chromium sandbox fails to start inside some corporate/DSH
+// Windows job objects. The renderer still runs with contextIsolation and
+// nodeIntegration disabled; keep this switch for the packaged Windows build.
+app.commandLine.appendSwitch("no-sandbox");
+
+function ensureShortcuts() {
+  if (!app.isPackaged || process.platform !== "win32") return;
+  const shortcuts = [
+    path.join(app.getPath("desktop"), "LangGraph Agent.lnk"),
+    path.join(
+      app.getPath("appData"),
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "LangGraph Agent.lnk",
+    ),
+  ];
+  for (const shortcut of shortcuts) {
+    try {
+      if (fs.existsSync(shortcut)) {
+        const existing = shell.readShortcutLink(shortcut);
+        if (existing.args?.includes("--no-sandbox")) continue;
+      }
+      shell.writeShortcutLink(shortcut, "create", {
+        target: process.execPath,
+        args: "--no-sandbox",
+        cwd: path.dirname(process.execPath),
+        description: "LangGraph Agent",
+        icon: process.execPath,
+        iconIndex: 0,
+      });
+    } catch {
+      // A shortcut is a convenience; never block startup if it can't be written.
+    }
+  }
+}
 
 function initSettings() {
   settingsStore = createSettingsStore({
@@ -260,6 +305,7 @@ ipcMain.handle("desktop:save-deepseek", async (_event, payload) => {
 });
 
 app.whenReady().then(async () => {
+  ensureShortcuts();
   initSettings();
   await createWindow();
 }).catch((error) => {

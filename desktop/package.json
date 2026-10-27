@@ -2,11 +2,14 @@
   "name": "langgraph-agent",
   "private": true,
   "version": "0.1.0",
+  "description": "LangGraph desktop agent with local file, Office, web and subagent tools",
+  "author": "LangGraph Agent",
   "main": "main.js",
   "scripts": {
     "dev": "concurrently -k \"vite --port 5173\" \"wait-on http://localhost:5173 && node launch-electron.cjs\"",
     "build": "vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dist:win": "pnpm build && electron-builder --win nsis --config electron-builder.yml"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -21,6 +24,7 @@
     "@vitejs/plugin-react": "^4.3.1",
     "concurrently": "^9.0.1",
     "electron": "43.3.0",
+    "electron-builder": "^26.18.0",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.2",
     "vite": "^5.4.8",
