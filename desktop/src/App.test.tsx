@@ -31,6 +31,9 @@ import { App } from "./App";
 beforeEach(() => {
   window.desktop = {
     getConfig: async () => ({ baseUrl: "http://test", token: "t" }),
+    getSetupState: async () => ({ needsSetup: false, baseUrl: "https://api.deepseek.com", model: "deepseek-flash" }),
+    testDeepSeek: async () => ({ ok: true }),
+    saveDeepSeek: async () => ({ baseUrl: "http://test", token: "t" }),
     getPathForFile: () => "",
   };
 });

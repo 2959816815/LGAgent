@@ -1225,3 +1225,12 @@ button {
 .mcp-permission { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
 .mcp-permission select { flex: 1; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
 .mcp-actions .danger { color: #fca5a5; }
+
+.setup-shell { min-height:100vh; display:grid; place-items:center; background:#0e0e0e; color:#eee; }
+.setup-card { width:min(440px,92vw); display:grid; gap:14px; padding:28px; border:1px solid #333; border-radius:12px; background:#171717; }
+.setup-card h1 { margin:0; font-size:22px; }
+.setup-card p { margin:0; color:#aaa; line-height:1.5; }
+.setup-card label { display:grid; gap:6px; font-size:14px; }
+.setup-card input { padding:10px; border:1px solid #3a3a3a; border-radius:7px; background:#0f0f0f; color:#eee; }
+.setup-actions { display:flex; gap:10px; justify-content:flex-end; }
+.setup-message { color:#f0b429; white-space:pre-wrap; word-break:break-word; }
