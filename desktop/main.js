@@ -1,21 +1,25 @@
-const { app, BrowserWindow, ipcMain, screen, nativeTheme, dialog } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  screen,
+  nativeTheme,
+  dialog,
+  safeStorage,
+} = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const readline = require("readline");
+const { createSettingsStore, DEFAULTS } = require("./settings.cjs");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const SIDECAR_TIMEOUT_MS = Number(process.env.DSH_SIDECAR_TIMEOUT_MS) || 60_000;
-const SIDECAR_TEMP = path.join(PROJECT_ROOT, ".desktop-temp");
-try {
-  fs.mkdirSync(SIDECAR_TEMP, { recursive: true });
-} catch {
-  // 交给子进程报错；这里不阻断启动
-}
 let mainWindow = null;
 let backend = null;
 let config = null;
+let settingsStore = null;
 
 function resolveUserData() {
   const preferred = path.join(app.getPath("appData"), "langgraph-agent");
@@ -33,6 +37,14 @@ app.setPath("userData", resolveUserData());
 app.setPath("sessionData", app.getPath("userData"));
 nativeTheme.themeSource = "dark";
 
+function initSettings() {
+  settingsStore = createSettingsStore({
+    filePath: path.join(app.getPath("userData"), "settings.json"),
+    encrypt: (value) => safeStorage.encryptString(value).toString("base64"),
+    decrypt: (value) => safeStorage.decryptString(Buffer.from(value, "base64")),
+  });
+}
+
 function findPython() {
   const candidates = [
     process.env.DSH_PYTHON,
@@ -42,27 +54,60 @@ function findPython() {
   return candidates.find((candidate) => candidate === "python" || fs.existsSync(candidate));
 }
 
+function sidecarCommand() {
+  if (app.isPackaged) {
+    return {
+      command: path.join(process.resourcesPath, "sidecar", "langgraph-sidecar.exe"),
+      args: ["--port", "0"],
+    };
+  }
+  const python = findPython();
+  if (!python) return null;
+  return { command: python, args: ["-m", "desktop_api", "--port", "0"] };
+}
+
 function startBackend() {
   return new Promise((resolve, reject) => {
     const token = crypto.randomBytes(24).toString("hex");
-    const python = findPython();
-    if (!python) {
+    const invocation = sidecarCommand();
+    if (!invocation) {
       reject(new Error("找不到 Python，请设置 DSH_PYTHON"));
       return;
     }
+    const saved = settingsStore.getDeepSeek();
+    const sidecarTemp = path.join(app.getPath("userData"), "tmp");
+    const logDir = path.join(app.getPath("userData"), "logs");
+    fs.mkdirSync(sidecarTemp, { recursive: true });
+    fs.mkdirSync(logDir, { recursive: true });
+    const logPath = path.join(logDir, "sidecar.log");
+    const log = (text) => {
+      try {
+        fs.appendFileSync(logPath, text, "utf8");
+      } catch {
+        // logging must never block startup
+      }
+    };
+
     const startedAt = Date.now();
-    backend = spawn(python, ["-m", "desktop_api", "--port", "0"], {
-      cwd: PROJECT_ROOT,
+    backend = spawn(invocation.command, invocation.args, {
+      cwd: app.getPath("userData"),
       env: {
         ...process.env,
         DSH_DESKTOP_TOKEN: token,
-        TEMP: SIDECAR_TEMP,
-        TMP: SIDECAR_TEMP,
-        TMPDIR: SIDECAR_TEMP,
-        PLAYWRIGHT_BROWSERS_PATH: path.join(SIDECAR_TEMP, "playwright-browsers"),
+        DSH_DATA_DIR: app.getPath("userData"),
+        LLM_PROVIDER: "deepseek",
+        DEEPSEEK_API_KEY: saved?.apiKey || "",
+        DEEPSEEK_BASE_URL: saved?.baseUrl || DEFAULTS.baseUrl,
+        DEEPSEEK_MODEL: saved?.model || DEFAULTS.model,
+        TEMP: sidecarTemp,
+        TMP: sidecarTemp,
+        TMPDIR: sidecarTemp,
+        PLAYWRIGHT_BROWSERS_PATH: path.join(sidecarTemp, "playwright-browsers"),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    backend.stdout.on("data", (chunk) => log(`[out] ${chunk}`));
+    backend.stderr.on("data", (chunk) => log(`[err] ${chunk}`));
 
     let settled = false;
     let stderrTail = "";
@@ -120,10 +165,44 @@ function startBackend() {
   });
 }
 
+async function restartBackend() {
+  if (backend) {
+    backend.kill();
+    backend = null;
+  }
+  config = await startBackend();
+  return config;
+}
+
+async function testDeepSeek({ apiKey, baseUrl, model }) {
+  const key = String(apiKey || "").trim();
+  if (!key) throw new Error("API Key 不能为空");
+  const root = String(baseUrl || DEFAULTS.baseUrl).replace(/\/+$/, "");
+  const response = await fetch(`${root}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      model: model || DEFAULTS.model,
+      messages: [{ role: "user", content: "ping" }],
+      max_tokens: 1,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`连接失败 (${response.status}): ${text.slice(0, 300)}`);
+  }
+  return { ok: true };
+}
+
 async function createWindow() {
-  console.log("[main] createWindow: starting backend");
-  await startBackend();
-  console.log("[main] createWindow: backend ready, creating window");
+  if (!settingsStore.needsSetup()) {
+    await startBackend();
+  }
+
   const area = screen.getPrimaryDisplay().workArea;
   const width = Math.min(960, area.width - 80);
   const height = Math.min(820, area.height - 80);
@@ -146,23 +225,43 @@ async function createWindow() {
     },
   });
   mainWindow.setMenuBarVisibility(false);
-  console.log("[main] createWindow: window created, loading URL");
-  await mainWindow.loadURL("http://localhost:5173");
-  // Some Windows/DPI combinations can place a "centered" window off-screen
-  // (observed at -25600,-25600). Re-assert visible bounds after load.
+  if (app.isPackaged) {
+    await mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
+  } else {
+    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL || "http://localhost:5173");
+  }
   mainWindow.setBounds({ x, y, width, height });
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
-  console.log("[main] createWindow: URL loaded");
 }
 
 ipcMain.handle("desktop:config", () => config);
 
-console.log("[main] module loaded");
-app.whenReady().then(() => {
-  console.log("[main] app ready");
-  return createWindow();
+ipcMain.handle("desktop:setup-state", () => {
+  const saved = settingsStore.getDeepSeek();
+  return {
+    needsSetup: saved === null,
+    baseUrl: saved?.baseUrl || DEFAULTS.baseUrl,
+    model: saved?.model || DEFAULTS.model,
+  };
+});
+
+ipcMain.handle("desktop:test-deepseek", async (_event, payload) => {
+  return testDeepSeek(payload || {});
+});
+
+ipcMain.handle("desktop:save-deepseek", async (_event, payload) => {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("当前系统不支持安全存储，无法保存 API Key");
+  }
+  settingsStore.saveDeepSeek(payload || {});
+  return restartBackend();
+});
+
+app.whenReady().then(async () => {
+  initSettings();
+  await createWindow();
 }).catch((error) => {
   console.error(error);
   dialog.showErrorBox("LangGraph Agent 启动失败", String(error?.message ?? error));
