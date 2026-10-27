@@ -10,10 +10,21 @@ const {
 } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const readline = require("readline");
 const { createSettingsStore, DEFAULTS } = require("./settings.cjs");
+
+// 从快捷方式/父进程启动时，标准输出管道可能已关闭。忽略 EPIPE，
+// 避免一条 console.error 让整个主进程崩溃。
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.on === "function") {
+    stream.on("error", (error) => {
+      if (error?.code !== "EPIPE") throw error;
+    });
+  }
+}
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const SIDECAR_TIMEOUT_MS = Number(process.env.DSH_SIDECAR_TIMEOUT_MS) || 60_000;
@@ -23,12 +34,13 @@ let config = null;
 let settingsStore = null;
 
 function resolveUserData() {
-  const preferred = path.join(app.getPath("appData"), "langgraph-agent");
+  const roaming = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  const preferred = path.join(roaming, "langgraph-agent");
   try {
     fs.mkdirSync(preferred, { recursive: true });
     return preferred;
   } catch {
-    const fallback = path.join(PROJECT_ROOT, ".desktop-data");
+    const fallback = path.join(app.getPath("temp"), "langgraph-agent");
     fs.mkdirSync(fallback, { recursive: true });
     return fallback;
   }
