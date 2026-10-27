@@ -292,9 +292,12 @@ class SqliteSessionStore:
         return active_id
 
     def set_active_id(self, session_id: str | None) -> None:
-        if session_id is not None:
-            self._validate_id(session_id)
-        self._set_state("active_id", session_id or "")
+        if session_id is None:
+            with self._connect() as connection:
+                connection.execute("DELETE FROM state WHERE key = 'active_id'")
+            return
+        self._validate_id(session_id)
+        self._set_state("active_id", session_id)
 
     def load_active_or_create(self) -> Session:
         active_id = self.get_active_id()

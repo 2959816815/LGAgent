@@ -58,6 +58,7 @@ class SqliteSessionStoreTests(unittest.TestCase):
         self.store.set_active_id(session.id)
         self.store.delete(session.id)
         self.assertIsNone(self.store.get_active_id())
+        self.assertFalse(any("active 会话 ID 无效" in warning for warning in self.store.pop_warnings()))
         with self.assertRaises(Exception):
             self.store.load(session.id)
 
