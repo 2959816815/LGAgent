@@ -152,6 +152,7 @@ function startBackend() {
         ...process.env,
         DSH_DESKTOP_TOKEN: token,
         DSH_DATA_DIR: app.getPath("userData"),
+        DSH_SESSION_STORE: "sqlite",
         LLM_PROVIDER: "deepseek",
         DEEPSEEK_API_KEY: saved?.apiKey || "",
         DEEPSEEK_BASE_URL: saved?.baseUrl || DEFAULTS.baseUrl,

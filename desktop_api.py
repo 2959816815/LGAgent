@@ -28,6 +28,7 @@ from model_registry import (
     resolve_selector,
 )
 from session_store import SessionStore, SessionStoreError
+from session_store_sqlite import SqliteSessionStore
 from subagent_manager import SubagentManager
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -89,6 +90,17 @@ def _message_json(message: Any) -> dict:
     return data
 
 
+def _create_session_store(data_dir: Path):
+    """按环境变量选择会话后端；默认保持旧 JSON，安装包显式启用 SQLite。"""
+    backend = os.getenv("DSH_SESSION_STORE", "json").strip().lower()
+    if backend == "sqlite":
+        return SqliteSessionStore(
+            data_dir / "agent.db",
+            legacy_dir=data_dir / ".sessions",
+        )
+    return SessionStore(data_dir / ".sessions")
+
+
 def create_app(
     root: Path,
     token: str,
@@ -97,7 +109,7 @@ def create_app(
     data_root: Path | None = None,
 ) -> FastAPI:
     data_dir = Path(data_root or os.getenv("DSH_DATA_DIR") or root)
-    store = SessionStore(data_dir / ".sessions")
+    store = _create_session_store(data_dir)
     manager = SubagentManager(project_root=root)
     mcp = mcp_manager if mcp_manager is not None else McpManager(data_dir)
 
