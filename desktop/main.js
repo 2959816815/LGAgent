@@ -16,6 +16,19 @@ const crypto = require("crypto");
 const readline = require("readline");
 const { createSettingsStore, DEFAULTS } = require("./settings.cjs");
 
+const BOOT_LOG = process.env.LANGGRAPH_BOOT_LOG || path.join(os.tmpdir(), "langgraph-boot.log");
+function bootLog(stage, error) {
+  try {
+    const detail = error ? ` error=${error?.stack || error}` : "";
+    fs.appendFileSync(BOOT_LOG, `${new Date().toISOString()} pid=${process.pid} ${stage}${detail}\n`, "utf8");
+  } catch {
+    // Boot diagnostics must never block startup.
+  }
+}
+bootLog("module loaded");
+process.on("uncaughtException", (error) => bootLog("uncaughtException", error));
+process.on("unhandledRejection", (error) => bootLog("unhandledRejection", error));
+
 // 从快捷方式/父进程启动时，标准输出管道可能已关闭。忽略 EPIPE，
 // 避免一条 console.error 让整个主进程崩溃。
 for (const stream of [process.stdout, process.stderr]) {
@@ -61,7 +74,9 @@ function resolveUserData() {
   );
 }
 
+bootLog("before resolveUserData");
 app.setPath("userData", resolveUserData());
+bootLog("after resolveUserData");
 app.setPath("sessionData", app.getPath("userData"));
 nativeTheme.themeSource = "dark";
 
@@ -322,10 +337,13 @@ ipcMain.handle("desktop:save-deepseek", async (_event, payload) => {
 });
 
 app.whenReady().then(async () => {
+  bootLog("app ready");
   ensureShortcuts();
   initSettings();
   await createWindow();
+  bootLog("window created");
 }).catch((error) => {
+  bootLog("whenReady failed", error);
   console.error(error);
   dialog.showErrorBox("LangGraph Agent 启动失败", String(error?.message ?? error));
   app.quit();
