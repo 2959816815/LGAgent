@@ -65,15 +65,8 @@ app.setPath("userData", resolveUserData());
 app.setPath("sessionData", app.getPath("userData"));
 nativeTheme.themeSource = "dark";
 // The Chromium sandbox can fail inside Windows job objects before the first
-// window appears. appendSwitch() is too late at that point, so relaunch the
-// packaged app once with the switch on the real command line.
-if (app.isPackaged && process.platform === "win32" && !process.argv.includes("--no-sandbox")) {
-  app.relaunch({ args: ["--no-sandbox", ...process.argv.slice(1)] });
-  app.exit(0);
-}
-// Electron's Chromium sandbox fails to start inside some corporate/DSH
-// Windows job objects. The renderer still runs with contextIsolation and
-// nodeIntegration disabled; keep this switch for the packaged Windows build.
+// window appears. Set the switch before the app becomes ready; the packaged
+// shortcut also passes --no-sandbox for environments where this is too late.
 app.commandLine.appendSwitch("no-sandbox");
 
 function ensureShortcuts() {
