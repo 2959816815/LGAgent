@@ -179,6 +179,16 @@ function Sidebar(props: {
       </div>
       <div className="sidebar-footer">
         <span className="status-dot" /> 本地服务已连接
+        <button
+          className="diag-button"
+          type="button"
+          title="导出日志与配置诊断信息（不含 API Key）"
+          onClick={() => {
+            void window.desktop?.exportDiagnostics();
+          }}
+        >
+          导出诊断
+        </button>
       </div>
     </aside>
   );

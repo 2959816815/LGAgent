@@ -21,6 +21,7 @@ interface Window {
     getSetupState(): Promise<SetupState>;
     testDeepSeek(input: DeepSeekInput): Promise<{ ok: boolean }>;
     saveDeepSeek(input: DeepSeekInput): Promise<DesktopConfig>;
+    exportDiagnostics(): Promise<string | null>;
     getPathForFile(file: File): string;
   };
 }

@@ -5,5 +5,6 @@ contextBridge.exposeInMainWorld("desktop", {
   getSetupState: () => ipcRenderer.invoke("desktop:setup-state"),
   testDeepSeek: (payload) => ipcRenderer.invoke("desktop:test-deepseek", payload),
   saveDeepSeek: (payload) => ipcRenderer.invoke("desktop:save-deepseek", payload),
+  exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
 });

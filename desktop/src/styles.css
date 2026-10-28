@@ -231,6 +231,21 @@ button {
   font-size: 11px;
 }
 
+.diag-button {
+  margin-left: auto;
+  padding: 2px 5px;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.diag-button:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 .status-dot,
 .live-dot {
   width: 7px;

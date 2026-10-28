@@ -383,6 +383,31 @@ async function createWindow() {
   mainWindow.focus();
 }
 
+ipcMain.handle("desktop:export-diagnostics", async () => {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: "导出诊断信息",
+    defaultPath: path.join(app.getPath("downloads"), `langgraph-diagnostics-${stamp}.json`),
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  });
+  if (canceled || !filePath) return null;
+  const saved = settingsStore.getDeepSeek();
+  const report = {
+    generatedAt: new Date().toISOString(),
+    appVersion: app.getVersion(),
+    electron: process.versions.electron,
+    platform: process.platform,
+    arch: process.arch,
+    packaged: app.isPackaged,
+    dataDir: app.getPath("userData"),
+    settings: saved ? { baseUrl: saved.baseUrl, model: saved.model, hasApiKey: true } : null,
+    bootLog: readLogTail(BOOT_LOG),
+    sidecarLog: readLogTail(path.join(app.getPath("userData"), "logs", "sidecar.log")),
+  };
+  fs.writeFileSync(filePath, JSON.stringify(report, null, 2), "utf8");
+  return filePath;
+});
+
 ipcMain.handle("desktop:config", () => config);
 
 ipcMain.handle("desktop:setup-state", () => {
