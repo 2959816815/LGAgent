@@ -45,6 +45,10 @@ let mainWindow = null;
 let backend = null;
 let config = null;
 let settingsStore = null;
+let quitting = false;
+let restarting = false;
+let restartTimer = null;
+let restartAttempt = 0;
 
 function canWriteDirectory(directory) {
   try {
@@ -142,6 +146,63 @@ function sidecarCommand() {
   return { command: python, args: ["-m", "desktop_api", "--port", "0"] };
 }
 
+function readLogTail(file, limit = 20_000) {
+  try {
+    return fs.readFileSync(file, "utf8").slice(-limit);
+  } catch {
+    return "";
+  }
+}
+
+function writeCrashDiagnostics(code, stderrTail) {
+  try {
+    const dir = path.join(app.getPath("userData"), "logs");
+    fs.mkdirSync(dir, { recursive: true });
+    const saved = settingsStore?.getDeepSeek();
+    const report = {
+      generatedAt: new Date().toISOString(),
+      appVersion: app.getVersion(),
+      electron: process.versions.electron,
+      platform: process.platform,
+      arch: process.arch,
+      exitCode: code,
+      stderrTail,
+      dataDir: app.getPath("userData"),
+      settings: saved ? { baseUrl: saved.baseUrl, model: saved.model, hasApiKey: true } : null,
+      bootLog: readLogTail(BOOT_LOG),
+      sidecarLog: readLogTail(path.join(dir, "sidecar.log")),
+    };
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.writeFileSync(path.join(dir, `crash-${stamp}.json`), JSON.stringify(report, null, 2), "utf8");
+  } catch {
+    // diagnostics must never block restart
+  }
+}
+
+function scheduleSidecarRestart(reason) {
+  if (quitting || restarting || restartTimer) return;
+  restarting = true;
+  restartAttempt += 1;
+  const delay = Math.min(30_000, 1_000 * 2 ** Math.min(restartAttempt - 1, 4));
+  console.error(`[sidecar] ${reason}; restarting in ${delay}ms (attempt ${restartAttempt})`);
+  restartTimer = setTimeout(async () => {
+    restartTimer = null;
+    try {
+      await restartBackend(true);
+      restartAttempt = 0;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.reload();
+      }
+    } catch (error) {
+      console.error("[sidecar] restart failed", error);
+      restarting = false;
+      scheduleSidecarRestart("restart failed");
+      return;
+    }
+    restarting = false;
+  }, delay);
+}
+
 function startBackend() {
   return new Promise((resolve, reject) => {
     const token = crypto.randomBytes(24).toString("hex");
@@ -237,18 +298,27 @@ function startBackend() {
             `sidecar 在就绪前退出（code ${code}）${stderrTail ? `：${stderrTail.trim()}` : ""}`,
           ),
         );
+        return;
       }
+      if (quitting || restarting) return;
+      writeCrashDiagnostics(code, stderrTail);
+      scheduleSidecarRestart(`exited with code ${code}`);
     });
   });
 }
 
-async function restartBackend() {
-  if (backend) {
-    backend.kill();
-    backend = null;
+async function restartBackend(fromWatchdog = false) {
+  if (!fromWatchdog) restarting = true;
+  try {
+    if (backend) {
+      backend.kill();
+      backend = null;
+    }
+    config = await startBackend();
+    return config;
+  } finally {
+    if (!fromWatchdog) restarting = false;
   }
-  config = await startBackend();
-  return config;
 }
 
 async function testDeepSeek({ apiKey, baseUrl, model }) {
@@ -350,10 +420,14 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  quitting = true;
+  if (restartTimer) clearTimeout(restartTimer);
   if (backend) backend.kill();
   app.quit();
 });
 
 app.on("before-quit", () => {
+  quitting = true;
+  if (restartTimer) clearTimeout(restartTimer);
   if (backend) backend.kill();
 });
