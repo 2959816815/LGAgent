@@ -5,7 +5,7 @@ const electron = require("electron");
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 
-const args = ["--no-sandbox", "--disable-gpu"];
+const args = ["--disable-gpu"];
 if (process.env.DSH_ELECTRON_DEBUG === "1") {
   args.push("--remote-debugging-port=9222");
 }
