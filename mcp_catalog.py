@@ -7,6 +7,7 @@ in ``mcp_servers.json`` (or can be referenced as ``${ENV_NAME}``).
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,19 +16,33 @@ def _root() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _sqlite_command() -> list[str]:
+    """Use the frozen sidecar as the MCP entrypoint when packaged."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--mcp-sqlite"]
+    return [sys.executable, str(_root() / "mcp_sqlite_server.py")]
+
+
+def _sqlite_default_db() -> str:
+    if getattr(sys, "frozen", False):
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+        return str(base / "langgraph-agent" / "agent.db")
+    return "data/agent.db"
+
+
 CATALOG: list[dict] = [
     {
         "id": "sqlite",
         "name": "SQLite 数据库",
         "description": "只读查询本地 SQLite：列表、表结构、SELECT/PRAGMA。",
-        "command": [sys.executable, str(_root() / "mcp_sqlite_server.py")],
+        "command": _sqlite_command(),
         "cwd": ".",
-        "env": {"MCP_SQLITE_DB": "data/agent.db"},
+        "env": {"MCP_SQLITE_DB": _sqlite_default_db()},
         "fields": [
             {
                 "key": "MCP_SQLITE_DB",
                 "label": "数据库路径",
-                "default": "data/agent.db",
+                "default": _sqlite_default_db(),
                 "required": True,
                 "secret": False,
             }

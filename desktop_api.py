@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import queue
+import sys
 import threading
 import time
 import uuid
@@ -692,6 +693,14 @@ app = create_app(BASE_DIR, DEFAULT_TOKEN, data_root=data_root)
 
 
 def main() -> None:
+    # 打包后的 sidecar 本身即可作为 SQLite MCP 的 stdio 入口，
+    # 避免依赖外部 Python 解释器。
+    if "--mcp-sqlite" in sys.argv:
+        from mcp_sqlite_server import mcp
+
+        mcp.run()
+        return
+
     import uvicorn
 
     parser = argparse.ArgumentParser()

@@ -17,8 +17,21 @@ if (-not (Test-Path -LiteralPath $python)) {
   --collect-submodules langgraph `
   --collect-submodules langchain_core `
   --collect-submodules langchain_openai `
-  --collect-submodules langchain_community `
   --collect-data certifi `
+  --exclude-module torch `
+  --exclude-module torchvision `
+  --exclude-module torchaudio `
+  --exclude-module tensorflow `
+  --exclude-module transformers `
+  --exclude-module sklearn `
+  --exclude-module scipy `
+  --exclude-module pandas `
+  --exclude-module matplotlib `
+  --exclude-module IPython `
+  --exclude-module notebook `
+  --exclude-module tkinter `
+  --exclude-module zmq `
+  --exclude-module onnxruntime `
   desktop_api.py
 
 if ($LASTEXITCODE -ne 0) {
