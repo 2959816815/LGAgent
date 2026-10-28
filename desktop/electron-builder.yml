@@ -2,7 +2,7 @@ appId: com.langgraph.agent
 productName: LangGraph Agent
 electronDist: node_modules/electron/dist
 directories:
-  output: ../release
+  output: ../release-final
   buildResources: build
 files:
   - main.js
@@ -21,6 +21,5 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  createDesktopShortcut: false
-  createStartMenuShortcut: false
-  include: build/installer.nsh
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
