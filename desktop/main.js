@@ -64,10 +64,6 @@ function resolveUserData() {
 app.setPath("userData", resolveUserData());
 app.setPath("sessionData", app.getPath("userData"));
 nativeTheme.themeSource = "dark";
-// The Chromium sandbox can fail inside Windows job objects before the first
-// window appears. Set the switch before the app becomes ready; the packaged
-// shortcut also passes --no-sandbox for environments where this is too late.
-app.commandLine.appendSwitch("no-sandbox");
 
 function ensureShortcuts() {
   if (!app.isPackaged || process.platform !== "win32") return;
@@ -86,11 +82,11 @@ function ensureShortcuts() {
     try {
       if (fs.existsSync(shortcut)) {
         const existing = shell.readShortcutLink(shortcut);
-        if (existing.args?.includes("--no-sandbox")) continue;
+        if (!existing.args) continue;
       }
       shell.writeShortcutLink(shortcut, "create", {
         target: process.execPath,
-        args: "--no-sandbox",
+        args: "",
         cwd: path.dirname(process.execPath),
         description: "LangGraph Agent",
         icon: process.execPath,
@@ -140,9 +136,9 @@ function startBackend() {
       return;
     }
     const saved = settingsStore.getDeepSeek();
-    const sidecarTemp = path.join(app.getPath("userData"), "tmp");
-    const logDir = path.join(app.getPath("userData"), "logs");
+    const sidecarTemp = path.join(path.dirname(process.execPath), "data", "tmp");
     fs.mkdirSync(sidecarTemp, { recursive: true });
+    const logDir = path.join(app.getPath("userData"), "logs");
     fs.mkdirSync(logDir, { recursive: true });
     const logPath = path.join(logDir, "sidecar.log");
     const log = (text) => {
