@@ -848,7 +848,9 @@ function RightPanel(props: {
               <div className="agent-meta">
                 {agent.id} · {timeLabel(agent.created_at)}
               </div>
-              {agent.error && <div className="agent-error">{agent.error}</div>}
+              {agent.error && agent.status !== "succeeded" && (
+                <div className="agent-error">{agent.error}</div>
+              )}
               {agent.result && <div className="agent-result">{agent.result.slice(0, 180)}</div>}
             </div>
           ))}

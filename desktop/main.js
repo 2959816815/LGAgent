@@ -48,6 +48,20 @@ let settingsStore = null;
 let quitting = false;
 let restarting = false;
 let restartTimer = null;
+
+// 多开会让每个实例都启动一个 sidecar；后启动的实例会把正在运行的子 agent
+// 误判为“主程序重启”。只允许一个实例，第二次启动时聚焦已有窗口。
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
 let restartAttempt = 0;
 
 function canWriteDirectory(directory) {

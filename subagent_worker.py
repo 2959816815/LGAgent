@@ -66,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         record.messages = messages
         record.result = _last_ai_text(messages)
         record.status = "succeeded"
+        record.error = None
         code = 0
     except Exception as exc:  # noqa: BLE001
         record.status = "failed"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -14,6 +15,15 @@ from model_registry import initial_model_key, resolve_selector
 MAX_RUNNING = 3
 WAIT_DEFAULT = 180
 WAIT_MAX = 600
+
+
+def _pid_alive(pid: int) -> bool:
+    """判断进程是否仍在运行（Windows/POSIX 通用）。"""
+    try:
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 class SubagentError(Exception):
@@ -52,6 +62,10 @@ class SubagentManager:
     def _fail_orphans(self) -> None:
         for record in self.store.list_records():
             if record.status == "running":
+                # 同一台机器上可能有多个 Manager（多开应用/测试进程）。
+                # 只要 worker 进程还活着，就不能把任务判成“主程序重启”。
+                if record.pid is not None and _pid_alive(record.pid):
+                    continue
                 record.status = "failed"
                 record.finished_at = now_iso()
                 record.error = "主程序重启，无法确认子进程状态"
@@ -86,10 +100,14 @@ class SubagentManager:
                     if sys.platform == "win32"
                     else 0
                 )
+                command = (
+                    [sys.executable, "--subagent-worker"]
+                    if getattr(sys, "frozen", False)
+                    else [sys.executable, str(self.worker_path)]
+                )
                 process = subprocess.Popen(
                     [
-                        sys.executable,
-                        str(self.worker_path),
+                        *command,
                         "--model-key",
                         self._model_key,
                         "--agent-id",
