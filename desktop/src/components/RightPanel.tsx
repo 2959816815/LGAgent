@@ -208,6 +208,8 @@ export function RightPanel(props: {
   onMcpPermission: (id: string, permission: string) => void;
   onInsertPath: (path: string) => void;
   onCancelAgent: (id: string) => void;
+  onCompact: () => void;
+  compacting: boolean;
 }) {
   const [tab, setTab] = useState<"tasks" | "tools" | "context" | "files" | "mcp">("tasks");
   const running = props.agents.filter((agent) => agent.status === "running").length;
@@ -344,6 +346,15 @@ export function RightPanel(props: {
               <span>子 agent</span>
             </div>
           </div>
+
+          <button
+            type="button"
+            className="context-compact"
+            disabled={props.compacting || props.messages.length === 0}
+            onClick={props.onCompact}
+          >
+            {props.compacting ? "正在压缩…" : "立即压缩上下文"}
+          </button>
 
           <div className="context-note">
             上下文按“字符数 ÷ 4”估算，不含系统提示词；精确 token 以模型服务商为准。

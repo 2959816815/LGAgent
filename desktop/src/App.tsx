@@ -3,6 +3,7 @@ import {
   addMcpServer,
   cancelAgent,
   cancelRun,
+  compactSession,
   createSession,
   deleteSession,
   getSession,
@@ -63,6 +64,7 @@ export function App() {
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [compacting, setCompacting] = useState(false);
   const [earlier, setEarlier] = useState<{ hasMore: boolean; nextBefore: number | null }>({
     hasMore: false,
     nextBefore: null,
@@ -381,6 +383,25 @@ export function App() {
     }
   }
 
+  async function compactCurrent(): Promise<void> {
+    if (!detail || streaming || compacting) return;
+    const confirmed = window.confirm(
+      "将把较早的消息压缩成摘要，最近 10 条保留原文。压缩后无法还原原始消息，继续？",
+    );
+    if (!confirmed) return;
+    setCompacting(true);
+    try {
+      const updated = await compactSession(detail.id);
+      setDetail(updated);
+      setMessages(updated.messages);
+      setError("");
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setCompacting(false);
+    }
+  }
+
   async function undoLastWrite(): Promise<void> {
     if (!detail || undoing) return;
     setUndoing(true);
@@ -505,6 +526,8 @@ export function App() {
         }
         onInsertPath={(path) => insertPaths([path])}
         onCancelAgent={(id) => void cancelAgentAndRefresh(id)}
+        onCompact={() => void compactCurrent()}
+        compacting={compacting}
       />
       {settingsOpen && (
         <SettingsDialog

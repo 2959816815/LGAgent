@@ -168,14 +168,14 @@ def summarize_messages(messages: list, model_key: str) -> str:
 
 
 def compact_session(
-    session, model_key: str, context_window: int, summarizer=None
+    session, model_key: str, context_window: int, summarizer=None, force: bool = False
 ) -> bool:
-    """上下文超阈值时压缩早期消息；返回是否真的压缩了。"""
-    if context_window <= 0:
+    """上下文超阈值时压缩早期消息；force=True 时忽略阈值（手动触发）。"""
+    if not force and context_window <= 0:
         return False
     if len(session.messages) <= COMPACT_KEEP_RECENT + 1:
         return False
-    if estimate_tokens(session.messages) < int(context_window * COMPACT_RATIO):
+    if not force and estimate_tokens(session.messages) < int(context_window * COMPACT_RATIO):
         return False
     older = session.messages[:-COMPACT_KEEP_RECENT]
     if not older:
@@ -643,6 +643,29 @@ def create_app(
                     # run_graph 的 finally 在真正结束时清理。
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    @app.post("/api/sessions/{session_id}/compact", dependencies=[Depends(require_token)])
+    def compact_now(session_id: str) -> dict:
+        with runs_lock:
+            if session_id in active_runs:
+                raise HTTPException(status_code=409, detail="已有回复正在生成")
+            try:
+                session = store.load(session_id)
+            except SessionStoreError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if len(session.messages) <= COMPACT_KEEP_RECENT + 1:
+                raise HTTPException(status_code=400, detail="消息太少，暂时不需要压缩")
+            key = session.model_key or initial_model_key()
+            try:
+                profile = get_profile(key)
+            except ModelConfigError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not compact_session(
+                session, key, profile.context_window, summarizer, force=True
+            ):
+                raise HTTPException(status_code=502, detail="压缩失败：未能生成摘要")
+            store.save(session)
+            return session_json(session)
 
     @app.post("/api/runs/{run_id}/cancel", dependencies=[Depends(require_token)])
     def cancel_run(run_id: str):

@@ -1280,6 +1280,10 @@ button {
 .scroll-bottom { pointer-events: auto; padding: 4px 14px; font-size: 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-2); color: var(--muted); cursor: pointer; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
 .scroll-bottom:hover { color: var(--text); border-color: var(--accent); }
 
-.context-summary { margin-bottom: 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 12px; }
-.context-summary summary { cursor: pointer; }
-.context-summary-text { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--text); font: inherit; }
+.compacted-summary { margin-bottom: 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 12px; }
+.compacted-summary summary { cursor: pointer; }
+.compacted-summary-text { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--text); font: inherit; }
+
+.context-compact { margin-top: 12px; width: 100%; padding: 7px 10px; font-size: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-2); color: var(--text); cursor: pointer; }
+.context-compact:hover:not(:disabled) { border-color: var(--accent); }
+.context-compact:disabled { opacity: 0.5; cursor: default; }

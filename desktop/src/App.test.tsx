@@ -32,12 +32,13 @@ vi.mock("./api", () => {
     streamMessage: vi.fn(async function* () {
       // 空流：测试只关心调用参数
     }),
+    compactSession: vi.fn(async () => detail),
     cancelRun: vi.fn(),
   };
 });
 
 import { App } from "./App";
-import { getSession, streamMessage } from "./api";
+import { compactSession, getSession, streamMessage } from "./api";
 
 beforeEach(() => {
   window.desktop = {
@@ -75,6 +76,19 @@ describe("App", () => {
         { mode: "regenerate", editIndex: undefined },
       ),
     );
+  });
+
+  it("compacts the current session from the context tab", async () => {
+    vi.stubGlobal("confirm", () => true);
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("上下文"));
+    fireEvent.click(await screen.findByText("立即压缩上下文"));
+
+    await waitFor(() =>
+      expect(compactSession).toHaveBeenCalledWith("20260101-000000-abcd"),
+    );
+    vi.unstubAllGlobals();
   });
 
   it("loads earlier messages on demand", async () => {

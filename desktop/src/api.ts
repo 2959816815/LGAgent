@@ -154,6 +154,10 @@ export async function undoSession(sessionId: string): Promise<{ restored: string
   return request(`/api/sessions/${sessionId}/undo`, { method: "POST" });
 }
 
+export async function compactSession(id: string): Promise<SessionDetail> {
+  return request<SessionDetail>(`/api/sessions/${id}/compact`, { method: "POST" });
+}
+
 export async function listMcpServers(): Promise<McpServerStatus[]> {
   const data = await request<{ servers: McpServerStatus[] }>("/api/mcp/servers");
   return data.servers;

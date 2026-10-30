@@ -201,5 +201,65 @@ class CompactionApiTests(unittest.TestCase):
         self.assertGreater(detail["summary_count"], 0)
 
 
+class ManualCompactApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = WORKSPACE / f".test_manual_compact_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.store = SessionStore(self.root / ".sessions")
+        self.headers = {"X-Desktop-Token": "t"}
+
+    def _seed(self, count: int) -> str:
+        session = self.store.create("手动压缩")
+        session.messages = make_messages(count)
+        self.store.save(session)
+        return session.id
+
+    def test_compact_endpoint_forces_compaction(self):
+        session_id = self._seed(20)
+        app = create_app(
+            root=self.root, token="t", summarizer=lambda messages, key: "手动摘要"
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            f"/api/sessions/{session_id}/compact", headers=self.headers
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["summary"], "手动摘要")
+        self.assertEqual(len(body["messages"]), 10)
+        self.assertEqual(body["summary_count"], 10)
+
+    def test_compact_endpoint_rejects_short_sessions(self):
+        session_id = self._seed(4)
+        app = create_app(
+            root=self.root, token="t", summarizer=lambda messages, key: "摘要"
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            f"/api/sessions/{session_id}/compact", headers=self.headers
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_compact_endpoint_reports_failure(self):
+        session_id = self._seed(20)
+
+        def boom(messages, key):
+            raise RuntimeError("模型不可用")
+
+        app = create_app(root=self.root, token="t", summarizer=boom)
+        client = TestClient(app)
+
+        response = client.post(
+            f"/api/sessions/{session_id}/compact", headers=self.headers
+        )
+
+        self.assertEqual(response.status_code, 502)
+
+
 if __name__ == "__main__":
     unittest.main()

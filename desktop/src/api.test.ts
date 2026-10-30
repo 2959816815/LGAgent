@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cancelAgent, getSession, listAgents, setMcpEnabled, streamMessage } from "./api";
+import {
+  cancelAgent,
+  compactSession,
+  getSession,
+  listAgents,
+  setMcpEnabled,
+  streamMessage,
+} from "./api";
 
 interface Call {
   url: string;
@@ -69,6 +76,17 @@ describe("getSession", () => {
 
     expect(calls[0].url).toContain("/api/sessions/s1");
     expect(calls[0].url).not.toContain("limit=");
+  });
+});
+
+describe("compactSession", () => {
+  it("posts to the session compact route", async () => {
+    const calls = stubFetch();
+
+    await compactSession("s1");
+
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].url).toContain("/api/sessions/s1/compact");
   });
 });
 
