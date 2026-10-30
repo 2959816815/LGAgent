@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
 import { searchFiles } from "../api";
-import { estimateContext, formatCount, lastAssistantIndex } from "../helpers";
+import { copyText, estimateContext, formatCount, lastAssistantIndex } from "../helpers";
 import { markdownToHtml } from "../markdown";
 import type {
   ApprovalRequest,
@@ -42,6 +42,8 @@ export function Chat(props: {
   onLoadEarlier: () => void;
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -108,6 +110,19 @@ export function Chat(props: {
     setMention(null);
     setMentionResults([]);
     window.requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  function handleScroll(): void {
+    const element = scrollRef.current;
+    if (!element) return;
+    setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 80);
+  }
+
+  function scrollToBottom(): void {
+    const element = scrollRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    setAtBottom(true);
   }
 
   if (!props.session) {
@@ -182,7 +197,7 @@ export function Chat(props: {
         </div>
       </header>
 
-      <div className="message-scroll">
+      <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
         {props.hasEarlier && (
           <div className="load-earlier">
             <button type="button" onClick={props.onLoadEarlier}>
@@ -276,13 +291,25 @@ export function Chat(props: {
                     >
                       编辑
                     </button>
+                    <button type="button" onClick={() => void copyText(message.content)}>
+                      复制
+                    </button>
                   </div>
                 )}
-                {isLastAssistant && (
+                {message.role === "assistant" && (
                   <div className="message-actions">
-                    <button type="button" disabled={props.streaming} onClick={props.onRegenerate}>
-                      重新生成
+                    <button type="button" onClick={() => void copyText(message.content)}>
+                      复制
                     </button>
+                    {isLastAssistant && (
+                      <button
+                        type="button"
+                        disabled={props.streaming}
+                        onClick={props.onRegenerate}
+                      >
+                        重新生成
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -325,6 +352,13 @@ export function Chat(props: {
           </div>
         )}
         <div ref={endRef} />
+        {!atBottom && (
+          <div className="scroll-bottom-wrap">
+            <button type="button" className="scroll-bottom" onClick={scrollToBottom}>
+              回到底部
+            </button>
+          </div>
+        )}
       </div>
 
       <footer
