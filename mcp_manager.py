@@ -14,6 +14,8 @@ from typing import Any
 
 from mcp_catalog import catalog_items, get_preset
 from mcp_client import McpError, McpToolSpec, StdioMcpClient
+from secret_store import available as secrets_available
+from secret_store import is_protected, protect, unprotect
 
 
 class McpManagerError(RuntimeError):
@@ -42,6 +44,12 @@ class ManagedProcess:
 _VALID_PERMISSIONS = {"auto", "ask", "deny"}
 _ENV_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _SERVER_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+# 这些 key 的值按密钥处理：落盘前用 DPAPI 加密。
+_SECRET_KEY = re.compile(r"(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
+
+
+def _looks_secret(key: str) -> bool:
+    return bool(_SECRET_KEY.search(key))
 
 
 class McpManager:
@@ -61,6 +69,7 @@ class McpManager:
         self._starting: set[str] = set()
         self._state_lock = threading.Lock()
         self._raw = self._load_config()
+        self._migrate_secrets()
 
     # ---------------------------------------------------------------- config
     def _load_config(self) -> dict:
@@ -118,11 +127,40 @@ class McpManager:
         clean = json.loads(json.dumps(self._raw))
         for item in clean.get("servers", []):
             item.pop("last_error", None)
+            env = item.get("env")
+            if isinstance(env, dict):
+                item["env"] = {
+                    str(key): (
+                        protect(str(value))
+                        if _looks_secret(str(key))
+                        and isinstance(value, str)
+                        and value
+                        and not is_protected(value)
+                        else value
+                    )
+                    for key, value in env.items()
+                }
         tmp.write_text(
             json.dumps(clean, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         os.replace(tmp, self.config_path)
+
+    def _migrate_secrets(self) -> None:
+        """把历史配置里的明文密钥就地加密（每个配置只需迁移一次）。"""
+        if not secrets_available():
+            return
+        has_plaintext = any(
+            isinstance(item.get("env"), dict)
+            and any(
+                _looks_secret(str(key)) and isinstance(value, str) and value
+                and not is_protected(value)
+                for key, value in item["env"].items()
+            )
+            for item in self._servers()
+        )
+        if has_plaintext:
+            self._save_config()
 
     # ---------------------------------------------------------------- lifecycle
     def start_enabled(self) -> None:
@@ -359,7 +397,9 @@ class McpManager:
         if command and ("/" in command[0] or "\\" in command[0]):
             command[0] = str((cwd / command[0]).resolve())
         env = {
-            str(key): self._expand_env(str(value), f"{server_id}.env.{key}")
+            str(key): self._expand_env(
+                unprotect(str(value)), f"{server_id}.env.{key}"
+            )
             for key, value in (item.get("env") or {}).items()
         }
         client = StdioMcpClient(
