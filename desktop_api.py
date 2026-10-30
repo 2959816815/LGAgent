@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from graph_agent import SYSTEM_PROMPT, build_graph
+from graph_agent import SYSTEM_PROMPT, build_graph, build_llm
 from approval import ApprovalBroker, UndoEmpty, UndoEntry, set_current as set_approval_broker, undo_last
 from mcp_client import McpError
 from mcp_manager import McpManager, McpManagerError
@@ -130,6 +130,72 @@ def _mcp_status_json(status: Any) -> dict:
     }
 
 
+COMPACT_RATIO = 0.7
+COMPACT_KEEP_RECENT = 10
+SUMMARY_PREFIX = "【较早对话的摘要】"
+
+
+def estimate_tokens(messages: list) -> int:
+    """粗略估算 token 数（与前端一致：按字符数的 1/4）。"""
+    chars = sum(len(_text(getattr(message, "content", ""))) for message in messages)
+    return max(0, chars // 4)
+
+
+def summarize_messages(messages: list, model_key: str) -> str:
+    """调用模型把早期消息压缩成一段中文摘要。"""
+    lines: list[str] = []
+    for message in messages:
+        role = {"human": "用户", "ai": "助手", "tool": "工具"}.get(
+            getattr(message, "type", ""), "消息"
+        )
+        text = _text(message.content).strip()
+        if text:
+            lines.append(f"{role}: {text}")
+    if not lines:
+        return ""
+    transcript = "\n".join(lines)[-20_000:]
+    response = build_llm(model_key).invoke(
+        [
+            HumanMessage(
+                content=(
+                    "请把下面这段对话压缩成简洁的中文摘要，保留关键事实、结论、"
+                    "涉及的文件路径和未完成事项；不要编造内容。\n\n" + transcript
+                )
+            )
+        ]
+    )
+    return _text(response.content).strip()[:2_000]
+
+
+def compact_session(
+    session, model_key: str, context_window: int, summarizer=None
+) -> bool:
+    """上下文超阈值时压缩早期消息；返回是否真的压缩了。"""
+    if context_window <= 0:
+        return False
+    if len(session.messages) <= COMPACT_KEEP_RECENT + 1:
+        return False
+    if estimate_tokens(session.messages) < int(context_window * COMPACT_RATIO):
+        return False
+    older = session.messages[:-COMPACT_KEEP_RECENT]
+    if not older:
+        return False
+    try:
+        summary = (summarizer or summarize_messages)(older, model_key)
+    except Exception:  # noqa: BLE001
+        # 摘要失败不阻塞正常对话
+        return False
+    if not summary:
+        return False
+
+    session.summary = (
+        f"{session.summary}\n{summary}".strip() if session.summary else summary
+    )
+    session.summary_count += len(older)
+    session.messages = session.messages[-COMPACT_KEEP_RECENT:]
+    return True
+
+
 def create_app(
     root: Path,
     token: str,
@@ -137,6 +203,7 @@ def create_app(
     mcp_manager=None,
     data_root: Path | None = None,
     workspace: Path | None = None,
+    summarizer=None,
 ) -> FastAPI:
     data_dir = Path(data_root or os.getenv("DSH_DATA_DIR") or root)
     store = _create_session_store(data_dir)
@@ -193,6 +260,13 @@ def create_app(
             key = session.model_key or initial_model_key()
             manager.set_model_key(key)
             manager.set_current_session(session.id)
+            try:
+                profile = get_profile(key)
+                if compact_session(session, key, profile.context_window, summarizer):
+                    store.save(session)
+            except Exception:  # noqa: BLE001
+                # 压缩失败不影响本次对话
+                pass
             broker = ApprovalBroker(
                 run.run_id,
                 session.id,
@@ -207,7 +281,12 @@ def create_app(
             except Exception:
                 extra_tools = []
             graph = graph_builder(manager, model_key=key, extra_tools=extra_tools)
-            messages = [SystemMessage(content=SYSTEM_PROMPT), *session.messages]
+            messages = [SystemMessage(content=SYSTEM_PROMPT)]
+            if session.summary:
+                messages.append(
+                    SystemMessage(content=f"{SUMMARY_PREFIX}\n{session.summary}")
+                )
+            messages.extend(session.messages)
             final_messages = messages
             for mode, payload in graph.stream(
                 {"messages": messages},
@@ -347,6 +426,8 @@ def create_app(
             "updated_at": session.updated_at,
             "model_key": session.model_key or initial_model_key(),
             "message_count": len(session.messages),
+            "summary": session.summary,
+            "summary_count": session.summary_count,
             "messages": [_message_json(m) for m in session.messages],
         }
 

@@ -45,6 +45,10 @@ class Session:
     updated_at: str
     messages: list[BaseMessage] = field(default_factory=list)
     model_key: str | None = None
+    # 较早对话的摘要（压缩后 messages 只保留最近的若干轮）
+    summary: str = ""
+    # 已经被压缩进摘要的历史消息条数，仅用于界面提示
+    summary_count: int = 0
 
 
 @dataclass
@@ -228,6 +232,8 @@ class SessionStore:
             "created_at": session.created_at,
             "updated_at": session.updated_at,
             "model_key": session.model_key,
+            "summary": session.summary,
+            "summary_count": session.summary_count,
             "messages": messages_to_dict(messages),
         }
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -262,7 +268,22 @@ class SessionStore:
                 raise ValueError("model_key 必须是字符串或 null")
         except (KeyError, TypeError, ValueError) as exc:
             raise SessionStoreError(f"会话文件损坏: {session_id} ({exc})") from exc
-        return Session(session_id, title, created_at, updated_at, messages, model_key)
+        summary = raw.get("summary") or ""
+        if not isinstance(summary, str):
+            summary = ""
+        summary_count = raw.get("summary_count") or 0
+        if isinstance(summary_count, bool) or not isinstance(summary_count, int):
+            summary_count = 0
+        return Session(
+            session_id,
+            title,
+            created_at,
+            updated_at,
+            messages,
+            model_key,
+            summary=summary,
+            summary_count=summary_count,
+        )
 
     def list_sessions(self) -> list[SessionMeta]:
         if not self.root.exists():

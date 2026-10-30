@@ -198,6 +198,12 @@ export function Chat(props: {
       </header>
 
       <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
+        {session.summary && (
+          <details className="context-summary">
+            <summary>已压缩 {session.summary_count ?? 0} 条早期消息</summary>
+            <pre className="context-summary-text">{session.summary}</pre>
+          </details>
+        )}
         {props.hasEarlier && (
           <div className="load-earlier">
             <button type="button" onClick={props.onLoadEarlier}>

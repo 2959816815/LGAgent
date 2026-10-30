@@ -38,6 +38,8 @@ export interface SessionDetail extends SessionMeta {
   messages: Message[];
   has_more?: boolean;
   next_before?: number | null;
+  summary?: string;
+  summary_count?: number;
 }
 
 export interface AgentRecord {

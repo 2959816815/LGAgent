@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     model_key     TEXT,
-    message_count INTEGER NOT NULL DEFAULT 0
+    message_count INTEGER NOT NULL DEFAULT 0,
+    summary       TEXT NOT NULL DEFAULT '',
+    summary_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -108,7 +110,23 @@ class SqliteSessionStore:
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             elif version != SCHEMA_VERSION:
                 raise SessionStoreError(f"不支持的数据库版本: {version}")
+            self._ensure_summary_columns(connection)
             self._backfill_search_index(connection)
+
+    @staticmethod
+    def _ensure_summary_columns(connection: sqlite3.Connection) -> None:
+        """旧库升级：补上摘要相关列（不改变 SCHEMA_VERSION）。"""
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "summary" not in columns:
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''"
+            )
+        if "summary_count" not in columns:
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN summary_count INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _backfill_search_index(self, connection: sqlite3.Connection) -> None:
         """旧库升级：首次引入全文索引时，把已有消息补进去。"""
@@ -197,12 +215,14 @@ class SqliteSessionStore:
         session.messages = messages
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO sessions(id, title, created_at, updated_at, model_key, message_count) "
-                "VALUES(?, ?, ?, ?, ?, ?) "
+                "INSERT INTO sessions(id, title, created_at, updated_at, model_key, "
+                "message_count, summary, summary_count) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "title=excluded.title, created_at=excluded.created_at, "
                 "updated_at=excluded.updated_at, model_key=excluded.model_key, "
-                "message_count=excluded.message_count",
+                "message_count=excluded.message_count, summary=excluded.summary, "
+                "summary_count=excluded.summary_count",
                 (
                     session.id,
                     session.title,
@@ -210,6 +230,8 @@ class SqliteSessionStore:
                     session.updated_at,
                     session.model_key,
                     len(messages),
+                    session.summary,
+                    session.summary_count,
                 ),
             )
             connection.execute("DELETE FROM messages WHERE session_id = ?", (session.id,))
@@ -271,7 +293,7 @@ class SqliteSessionStore:
         self._validate_id(session_id)
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT id, title, created_at, updated_at, model_key "
+                "SELECT id, title, created_at, updated_at, model_key, summary, summary_count "
                 "FROM sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
@@ -295,6 +317,8 @@ class SqliteSessionStore:
             updated_at=row[3],
             messages=messages,
             model_key=row[4],
+            summary=row[5] or "",
+            summary_count=int(row[6] or 0),
         )
 
     def list_sessions(self) -> list[SessionMeta]:

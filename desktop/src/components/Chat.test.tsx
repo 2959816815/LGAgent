@@ -19,6 +19,8 @@ function makeProps() {
       message_count: 2,
       model_key: "local" as const,
       messages: [],
+      summary: "",
+      summary_count: 0,
     },
     messages: [
       { role: "user" as const, content: "请复制我" },
@@ -78,6 +80,17 @@ describe("Chat", () => {
     fireEvent.click(screen.getAllByText("复制")[0]);
 
     expect(writeText).toHaveBeenCalledWith("请复制我");
+  });
+
+  it("shows the compacted summary banner", () => {
+    const props = makeProps();
+    props.session.summary = "早先的摘要内容";
+    props.session.summary_count = 12;
+
+    render(<Chat {...props} />);
+
+    expect(screen.getByText("已压缩 12 条早期消息")).toBeTruthy();
+    expect(screen.getByText(/早先的摘要内容/)).toBeTruthy();
   });
 
   it("offers a back-to-bottom button after scrolling up", () => {
