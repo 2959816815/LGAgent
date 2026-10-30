@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +58,8 @@ class McpManager:
         self.startup_timeout = float(startup_timeout)
         self.tool_timeout = float(tool_timeout)
         self._processes: dict[str, ManagedProcess] = {}
+        self._starting: set[str] = set()
+        self._state_lock = threading.Lock()
         self._raw = self._load_config()
 
     # ---------------------------------------------------------------- config
@@ -71,7 +75,11 @@ class McpManager:
                             "npx",
                             "-y",
                             "@playwright/mcp@latest",
+                            "--browser",
+                            "chromium",
                             "--headless",
+                            "--no-sandbox",
+                            "--isolated",
                         ],
                         "cwd": ".",
                         "env": {},
@@ -146,21 +154,46 @@ class McpManager:
                     keep_client=True,
                 )
 
-    def restart(self, server_id: str) -> McpServerStatus:
+    def _launch_in_background(self, server_id: str) -> None:
+        """在后台线程里启动；HTTP 请求立即返回，状态先显示为 starting。"""
+        with self._state_lock:
+            self._starting.add(server_id)
+
+        def run() -> None:
+            try:
+                self._launch(server_id)
+            except Exception:  # noqa: BLE001
+                # _launch 内部已经把失败原因写进 last_error
+                pass
+            finally:
+                with self._state_lock:
+                    self._starting.discard(server_id)
+
+        threading.Thread(target=run, name=f"mcp-start-{server_id}", daemon=True).start()
+
+    def restart(self, server_id: str, background: bool = False) -> McpServerStatus:
         # 配置可能在应用运行期间被编辑；重启时重新读取，避免继续使用旧 env/command。
         self._raw = self._load_config()
         item = self._find(server_id)
         self._stop(server_id)
         if item.get("enabled", True):
-            self._launch(server_id)
+            if background:
+                self._launch_in_background(server_id)
+            else:
+                self._launch(server_id)
         return self._status(item)
 
-    def set_enabled(self, server_id: str, enabled: bool) -> McpServerStatus:
+    def set_enabled(
+        self, server_id: str, enabled: bool, background: bool = False
+    ) -> McpServerStatus:
         item = self._find(server_id)
         item["enabled"] = bool(enabled)
         self._save_config()
         if enabled:
-            self._launch(server_id)
+            if background:
+                self._launch_in_background(server_id)
+            else:
+                self._launch(server_id)
         else:
             self._stop(server_id)
         return self._status(item)
@@ -186,6 +219,7 @@ class McpManager:
         permission: str | None = None,
         server_id: str | None = None,
         name: str | None = None,
+        background: bool = False,
     ) -> McpServerStatus:
         """按目录模板新增一个 server，并立即尝试启动。"""
         try:
@@ -232,11 +266,14 @@ class McpManager:
         }
         self._raw.setdefault("servers", []).append(item)
         self._save_config()
-        try:
-            self._launch(target_id)
-        except (McpError, McpManagerError) as exc:
-            # 配置已保留，让用户能在面板里看到失败原因并修改配置后重试。
-            self._set_failure(target_id, f"MCP 启动失败: {exc}")
+        if background:
+            self._launch_in_background(target_id)
+        else:
+            try:
+                self._launch(target_id)
+            except (McpError, McpManagerError) as exc:
+                # 配置已保留，让用户能在面板里看到失败原因并修改配置后重试。
+                self._set_failure(target_id, f"MCP 启动失败: {exc}")
         return self._status(item)
 
     def remove_server(self, server_id: str) -> None:
@@ -366,6 +403,8 @@ class McpManager:
     ) -> None:
         item = self._find(server_id)
         item["last_error"] = message
+        # 失败原因同时写到 sidecar 的 stderr，方便在日志里排查（面板里也能看到）。
+        print(f"[mcp] {server_id} 启动失败: {message}", file=sys.stderr, flush=True)
         if not keep_client:
             managed = self._processes.pop(server_id, None)
             if managed is not None:
@@ -380,6 +419,8 @@ class McpManager:
             tool_names = [tool.name for tool in managed.client.tools]
         if not enabled:
             status = "disabled"
+        elif server_id in self._starting:
+            status = "starting"
         elif managed is not None and managed.client.alive:
             status = "running"
         elif item.get("last_error"):
@@ -396,38 +437,3 @@ class McpManager:
             tools=tool_names,
             last_error=item.get("last_error"),
         )
-
-
-def write_default_config(root: Path) -> Path:
-    """Create the default config used by a fresh checkout."""
-    path = Path(root).resolve() / "mcp_servers.json"
-    if not path.exists():
-        path.write_text(
-            json.dumps(
-                {
-                    "servers": [
-                        {
-                            "id": "playwright",
-                            "name": "Playwright",
-                            "enabled": True,
-                            "command": ["npx", "-y", "@playwright/mcp@latest"],
-                            "cwd": ".",
-                            "permission": "ask",
-                        },
-                        {
-                            "id": "fetch",
-                            "name": "Fetch",
-                            "enabled": False,
-                            "command": ["uvx", "mcp-server-fetch"],
-                            "cwd": ".",
-                            "permission": "ask",
-                        },
-                    ]
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-    return path

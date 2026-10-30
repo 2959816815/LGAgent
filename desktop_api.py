@@ -30,7 +30,7 @@ from model_registry import (
 )
 from session_store import SessionStore, SessionStoreError
 from session_store_sqlite import SqliteSessionStore
-from subagent_manager import SubagentManager
+from subagent_manager import SubagentError, SubagentManager
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_TOKEN = os.getenv("DSH_DESKTOP_TOKEN", "")
@@ -102,16 +102,48 @@ def _create_session_store(data_dir: Path):
     return SessionStore(data_dir / ".sessions")
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """严格解析布尔值：字符串 "false"/"0" 不能被当成 True。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return default
+        return text in {"1", "true", "yes", "on"}
+    return default
+
+
+def _mcp_status_json(status: Any) -> dict:
+    """MCP server 的统一序列化（多个端点共用，避免字段各写一份）。"""
+    return {
+        "id": status.id,
+        "name": status.name,
+        "enabled": status.enabled,
+        "status": status.status,
+        "permission": status.permission,
+        "tool_count": status.tool_count,
+        "tools": status.tools,
+        "last_error": status.last_error,
+    }
+
+
 def create_app(
     root: Path,
     token: str,
     graph_builder=build_graph,
     mcp_manager=None,
     data_root: Path | None = None,
+    workspace: Path | None = None,
 ) -> FastAPI:
     data_dir = Path(data_root or os.getenv("DSH_DATA_DIR") or root)
     store = _create_session_store(data_dir)
-    manager = SubagentManager(project_root=root)
+    manager = SubagentManager(
+        project_root=data_dir,
+        worker_path=Path(__file__).resolve().parent / "subagent_worker.py",
+    )
     mcp = mcp_manager if mcp_manager is not None else McpManager(data_dir)
 
     class RunState:
@@ -135,9 +167,32 @@ def create_app(
 
         final_messages = None
         tool_started: dict[str, float] = {}
+        emitted_tool_end: set[str] = set()
+
+        def emit_tool_end(message: ToolMessage) -> None:
+            # 同一个 ToolMessage 可能同时出现在 messages 和 updates 两种模式里，
+            # 按 call_id 去重，避免前端重复更新同一张工具卡片。
+            call_id = message.tool_call_id
+            if call_id in emitted_tool_end:
+                return
+            emitted_tool_end.add(call_id)
+            emit(
+                run,
+                "tool_end",
+                {
+                    "run_id": run.run_id,
+                    "tool": message.name or "tool",
+                    "call_id": call_id,
+                    "status": "error" if str(message.content).startswith("[错误]") else "ok",
+                    "duration_ms": int(
+                        (time.monotonic() - tool_started.get(call_id, time.monotonic())) * 1000
+                    ),
+                },
+            )
         try:
             key = session.model_key or initial_model_key()
             manager.set_model_key(key)
+            manager.set_current_session(session.id)
             broker = ApprovalBroker(
                 run.run_id,
                 session.id,
@@ -168,18 +223,7 @@ def create_app(
                         if text_chunk:
                             emit(run, "token", {"run_id": run.run_id, "text": text_chunk})
                     elif isinstance(message, ToolMessage):
-                        call_id = message.tool_call_id
-                        emit(
-                            run,
-                            "tool_end",
-                            {
-                                "run_id": run.run_id,
-                                "tool": message.name or "tool",
-                                "call_id": call_id,
-                                "status": "error" if str(message.content).startswith("[错误]") else "ok",
-                                "duration_ms": int((time.monotonic() - tool_started.get(call_id, time.monotonic())) * 1000),
-                            },
-                        )
+                        emit_tool_end(message)
                 elif mode == "updates":
                     for _node, update in payload.items():
                         for message in update.get("messages", []):
@@ -198,18 +242,7 @@ def create_app(
                                         },
                                     )
                             elif isinstance(message, ToolMessage):
-                                call_id = message.tool_call_id
-                                emit(
-                                    run,
-                                    "tool_end",
-                                    {
-                                        "run_id": run.run_id,
-                                        "tool": message.name or "tool",
-                                        "call_id": call_id,
-                                        "status": "error" if str(message.content).startswith("[错误]") else "ok",
-                                        "duration_ms": int((time.monotonic() - tool_started.get(call_id, time.monotonic())) * 1000),
-                                    },
-                                )
+                                emit_tool_end(message)
                 elif mode == "values":
                     final_messages = payload["messages"]
             session.messages = [
@@ -244,7 +277,10 @@ def create_app(
     def health() -> dict:
         return {"status": "ok"}
 
-    file_root = root.resolve()
+    # 文件面板与 @ 引用的根目录。开发期默认是项目根，打包后由 Electron
+    # 通过 DSH_WORKSPACE 传入真实工作区，避免把 sidecar 的 _internal 当成工作区。
+    workspace_root = workspace or os.getenv("DSH_WORKSPACE") or root
+    file_root = Path(workspace_root).resolve()
     ignored_dirs = {"node_modules", "dist", "build", "__pycache__", ".venv", "venv"}
 
     def file_entry(path: Path) -> dict:
@@ -348,8 +384,10 @@ def create_app(
         if not query:
             return {"results": []}
         needle = query.casefold()
+        metas = store.list_sessions()
+        titles = {meta.id: (meta.title or "") for meta in metas}
         results: list[dict] = []
-        for meta in store.list_sessions():
+        for meta in metas:
             title = meta.title or ""
             if needle in title.casefold():
                 results.append(
@@ -361,41 +399,40 @@ def create_app(
                         "snippet": title,
                     }
                 )
-            try:
-                session = store.load(meta.id)
-            except SessionStoreError:
-                continue
-            for index, message in enumerate(session.messages):
-                text = _text(message.content)
-                position = text.casefold().find(needle)
-                if position < 0:
-                    continue
-                start = max(0, position - 32)
-                end = min(len(text), position + len(query) + 64)
-                snippet = (
-                    ("…" if start else "")
-                    + text[start:end]
-                    + ("…" if end < len(text) else "")
-                )
+        # 消息命中交给后端：SQLite 用 FTS5 全文索引，JSON 后端退回扫描。
+        remaining = max(0, 20 - len(results))
+        if remaining:
+            for hit in store.search(query, limit=remaining):
                 results.append(
                     {
-                        "session_id": meta.id,
-                        "title": title,
-                        "role": getattr(message, "type", "message"),
-                        "message_index": index,
-                        "snippet": snippet,
+                        "session_id": hit["session_id"],
+                        "title": titles.get(hit["session_id"], ""),
+                        "role": hit["role"],
+                        "message_index": hit["message_index"],
+                        "snippet": hit["snippet"],
                     }
                 )
-                if len(results) >= 20:
-                    return {"results": results}
-        return {"results": results}
+        return {"results": results[:20]}
 
     @app.get("/api/sessions/{session_id}", dependencies=[Depends(require_token)])
-    def get_session(session_id: str) -> dict:
+    def get_session(
+        session_id: str, limit: int | None = None, before: int | None = None
+    ) -> dict:
         try:
-            return session_json(store.load(session_id))
+            session = store.load(session_id)
         except SessionStoreError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        payload = session_json(session)
+        if limit is None:
+            return payload
+        # 分页：返回 before 之前（不含）最近的 limit 条；before 缺省表示取最新一页。
+        total = len(session.messages)
+        upper = total if before is None else max(0, min(before, total))
+        lower = max(0, upper - max(0, limit))
+        payload["messages"] = payload["messages"][lower:upper]
+        payload["has_more"] = lower > 0
+        payload["next_before"] = lower
+        return payload
 
     @app.delete("/api/sessions/{session_id}", dependencies=[Depends(require_token)])
     def delete_session(session_id: str) -> dict:
@@ -442,8 +479,14 @@ def create_app(
     def post_message(session_id: str, payload: dict):
         text = str(payload.get("text", "")).strip()
         attachments = payload.get("attachments") or []
-        if not text and not attachments:
+        mode = str(payload.get("mode") or "send").strip().lower()
+        edit_index = payload.get("edit_index")
+
+        if mode not in {"send", "regenerate"}:
+            raise HTTPException(status_code=400, detail="未知的消息模式")
+        if mode == "send" and edit_index is None and not text and not attachments:
             raise HTTPException(status_code=400, detail="消息不能为空")
+
         with runs_lock:
             if session_id in active_runs:
                 raise HTTPException(status_code=409, detail="已有回复正在生成")
@@ -458,10 +501,41 @@ def create_app(
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if attachments and not profile.supports_vision:
                 raise HTTPException(status_code=400, detail="当前模型不支持图片，请切换到千问 VL")
-            content = _image_parts(text, attachments)
-            session.messages.append(HumanMessage(content=content))
-            if session.title == "新会话":
-                session.title = (text or "图片对话")[:30]
+
+            if mode == "regenerate":
+                # 重新生成：丢掉最后一条用户消息之后的所有内容，再用同样的输入跑一次。
+                last_human = next(
+                    (
+                        index
+                        for index in range(len(session.messages) - 1, -1, -1)
+                        if isinstance(session.messages[index], HumanMessage)
+                    ),
+                    None,
+                )
+                if last_human is None:
+                    raise HTTPException(status_code=400, detail="没有可重新生成的消息")
+                del session.messages[last_human + 1 :]
+                text = _text(session.messages[last_human].content)
+            elif edit_index is not None:
+                # 编辑后重发：改写指定用户消息，并丢弃它之后的全部轮次。
+                if isinstance(edit_index, bool) or not isinstance(edit_index, int):
+                    raise HTTPException(status_code=400, detail="edit_index 不合法")
+                if (
+                    edit_index < 0
+                    or edit_index >= len(session.messages)
+                    or not isinstance(session.messages[edit_index], HumanMessage)
+                ):
+                    raise HTTPException(status_code=400, detail="只能编辑用户消息")
+                if not text and not attachments:
+                    raise HTTPException(status_code=400, detail="消息不能为空")
+                content = _image_parts(text, attachments)
+                del session.messages[edit_index + 1 :]
+                session.messages[edit_index] = HumanMessage(content=content)
+            else:
+                content = _image_parts(text, attachments)
+                session.messages.append(HumanMessage(content=content))
+                if session.title == "新会话":
+                    session.title = (text or "图片对话")[:30]
             store.save(session)
             run = RunState(f"run-{uuid.uuid4().hex[:8]}", session_id)
             runs[run.run_id] = run
@@ -504,7 +578,7 @@ def create_app(
         run = runs.get(run_id)
         if run is None or run.broker is None:
             raise HTTPException(status_code=404, detail="run 不存在")
-        approved = bool(payload.get("approved"))
+        approved = _as_bool(payload.get("approved"))
         if not run.broker.resolve(approval_id, approved):
             raise HTTPException(status_code=404, detail="审批请求不存在或已处理")
         return {"approval_id": approval_id, "approved": approved}
@@ -520,20 +594,8 @@ def create_app(
 
     @app.get("/api/mcp/servers", dependencies=[Depends(require_token)])
     def mcp_servers() -> dict:
-        def item_json(item) -> dict:
-            return {
-                "id": item.id,
-                "name": item.name,
-                "enabled": item.enabled,
-                "status": item.status,
-                "permission": item.permission,
-                "tool_count": item.tool_count,
-                "tools": item.tools,
-                "last_error": item.last_error,
-            }
-
         try:
-            return {"servers": [item_json(item) for item in mcp.list_servers()]}
+            return {"servers": [_mcp_status_json(item) for item in mcp.list_servers()]}
         except (McpError, McpManagerError) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -558,21 +620,12 @@ def create_app(
                 env_values={str(k): str(v) for k, v in env_values.items()},
                 permission=payload.get("permission"),
                 name=payload.get("name"),
+                # 启动握手可能要几十秒，放后台，避免请求卡住
+                background=True,
             )
         except (McpError, McpManagerError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "server": {
-                "id": status.id,
-                "name": status.name,
-                "enabled": status.enabled,
-                "status": status.status,
-                "permission": status.permission,
-                "tool_count": status.tool_count,
-                "tools": status.tools,
-                "last_error": status.last_error,
-            }
-        }
+        return {"server": _mcp_status_json(status)}
 
     @app.delete("/api/mcp/servers/{server_id}", dependencies=[Depends(require_token)])
     def remove_mcp_server(server_id: str) -> dict:
@@ -588,52 +641,25 @@ def create_app(
             status = mcp.set_permission(server_id, str(payload.get("permission") or ""))
         except (McpError, McpManagerError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {
-            "server": {
-                "id": status.id,
-                "name": status.name,
-                "enabled": status.enabled,
-                "status": status.status,
-                "permission": status.permission,
-                "tool_count": status.tool_count,
-                "tools": status.tools,
-                "last_error": status.last_error,
-            }
-        }
+        return {"server": _mcp_status_json(status)}
 
     @app.post("/api/mcp/servers/{server_id}/restart", dependencies=[Depends(require_token)])
     def restart_mcp(server_id: str) -> dict:
         try:
-            status = mcp.restart(server_id)
+            status = mcp.restart(server_id, background=True)
         except (McpError, McpManagerError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"server": {
-            "id": status.id,
-            "name": status.name,
-            "enabled": status.enabled,
-            "status": status.status,
-            "permission": status.permission,
-            "tool_count": status.tool_count,
-            "tools": status.tools,
-            "last_error": status.last_error,
-        }}
+        return {"server": _mcp_status_json(status)}
 
     @app.post("/api/mcp/servers/{server_id}/enable", dependencies=[Depends(require_token)])
     def enable_mcp(server_id: str, payload: dict) -> dict:
         try:
-            status = mcp.set_enabled(server_id, bool(payload.get("enabled", True)))
+            status = mcp.set_enabled(
+                server_id, _as_bool(payload.get("enabled"), default=True), background=True
+            )
         except (McpError, McpManagerError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"server": {
-            "id": status.id,
-            "name": status.name,
-            "enabled": status.enabled,
-            "status": status.status,
-            "permission": status.permission,
-            "tool_count": status.tool_count,
-            "tools": status.tools,
-            "last_error": status.last_error,
-        }}
+        return {"server": _mcp_status_json(status)}
 
     @app.get("/api/models", dependencies=[Depends(require_token)])
     def models() -> dict:
@@ -654,12 +680,16 @@ def create_app(
         return {"models": items}
 
     @app.get("/api/agents", dependencies=[Depends(require_token)])
-    def agents() -> dict:
+    def agents(session_id: str | None = None) -> dict:
+        records = manager.list_records()
+        if session_id:
+            records = [record for record in records if record.session_id == session_id]
         return {
             "agents": [
                 {
                     "id": record.id,
                     "task": record.task,
+                    "session_id": record.session_id,
                     "status": record.status,
                     "created_at": record.created_at,
                     "started_at": record.started_at,
@@ -667,16 +697,28 @@ def create_app(
                     "result": record.result,
                     "error": record.error,
                 }
-                for record in manager.list_records()
+                for record in records
             ]
         }
 
+    @app.post("/api/agents/{agent_id}/cancel", dependencies=[Depends(require_token)])
+    def cancel_agent(agent_id: str) -> dict:
+        try:
+            record = manager.cancel(agent_id)
+        except SubagentError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"id": record.id, "status": record.status}
+
     @app.on_event("startup")
     def start_mcp_servers() -> None:
-        try:
-            mcp.start_enabled()
-        except Exception:
-            pass
+        # MCP 握手可能要几十秒；放后台线程，避免拖住 READY 和窗口启动。
+        def run() -> None:
+            try:
+                mcp.start_enabled()
+            except Exception:
+                pass
+
+        threading.Thread(target=run, name="mcp-startup", daemon=True).start()
 
     @app.on_event("shutdown")
     def stop_mcp_servers() -> None:
@@ -688,11 +730,14 @@ def create_app(
     return app
 
 
-data_root = Path(os.getenv("DSH_DATA_DIR", str(BASE_DIR)))
-app = create_app(BASE_DIR, DEFAULT_TOKEN, data_root=data_root)
-
-
 def main() -> None:
+    # 打包后的 sidecar 本身即可作为子 agent worker，避免依赖外部 Python。
+    if "--subagent-worker" in sys.argv:
+        from subagent_worker import main as worker_main
+
+        index = sys.argv.index("--subagent-worker")
+        raise SystemExit(worker_main(sys.argv[index + 1 :]))
+
     # 打包后的 sidecar 本身即可作为 SQLite MCP 的 stdio 入口，
     # 避免依赖外部 Python 解释器。
     if "--mcp-sqlite" in sys.argv:
@@ -702,6 +747,11 @@ def main() -> None:
         return
 
     import uvicorn
+
+    # 只在真正提供服务时才构建应用：子 agent worker / SQLite MCP 进程
+    # 走上面的分支，不应顺带初始化会话库与 MCP 管理器。
+    data_root = Path(os.getenv("DSH_DATA_DIR", str(BASE_DIR)))
+    app = create_app(BASE_DIR, DEFAULT_TOKEN, data_root=data_root)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=0)

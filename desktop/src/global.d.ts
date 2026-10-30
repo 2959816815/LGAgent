@@ -15,12 +15,21 @@ interface DeepSeekInput {
   model: string;
 }
 
+interface SettingsSnapshot {
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+}
+
 interface Window {
   desktop?: {
     getConfig(): Promise<DesktopConfig>;
     getSetupState(): Promise<SetupState>;
+    getSettings(): Promise<SettingsSnapshot>;
     testDeepSeek(input: DeepSeekInput): Promise<{ ok: boolean }>;
+    testSettings(input: DeepSeekInput): Promise<{ ok: boolean }>;
     saveDeepSeek(input: DeepSeekInput): Promise<DesktopConfig>;
+    saveSettings(input: DeepSeekInput): Promise<DesktopConfig>;
     exportDiagnostics(): Promise<string | null>;
     getPathForFile(file: File): string;
   };

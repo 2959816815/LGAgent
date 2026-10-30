@@ -10,9 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
-from desktop_api import _message_json, create_app
+from desktop_api import _as_bool, _message_json, create_app
 from session_store import SessionStore
 
 
@@ -69,6 +69,59 @@ class DesktopDataDirTests(unittest.TestCase):
         self.assertEqual(captured["mcp"], data)
 
 
+class DesktopWorkspaceTests(unittest.TestCase):
+    def test_files_use_workspace_not_code_root(self):
+        base = Path(__file__).resolve().parent.parent / f".test_workspace_{uuid.uuid4().hex[:8]}"
+        base.mkdir()
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+
+        code_root = base / "app"
+        code_root.mkdir()
+        (code_root / "internal_only.txt").write_text("internal", encoding="utf-8")
+
+        workspace = base / "workspace"
+        workspace.mkdir()
+        (workspace / "user_file.txt").write_text("hello", encoding="utf-8")
+
+        app = create_app(root=code_root, token="t", workspace=workspace)
+        client = TestClient(app)
+        payload = client.get("/api/files", headers={"X-Desktop-Token": "t"}).json()
+        names = [entry["name"] for entry in payload["entries"]]
+
+        self.assertIn("user_file.txt", names)
+        self.assertNotIn("internal_only.txt", names)
+
+
+class LazyAppTests(unittest.TestCase):
+    def test_import_does_not_initialize_data_dir(self):
+        import subprocess
+        import sys
+
+        project = Path(__file__).resolve().parent.parent
+        base = project / f".test_lazy_{uuid.uuid4().hex[:8]}"
+        base.mkdir()
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+
+        env = os.environ.copy()
+        env["DSH_DATA_DIR"] = str(base)
+        env["PYTHONPATH"] = str(project)
+
+        result = subprocess.run(
+            [sys.executable, "-c", "import desktop_api"],
+            cwd=str(project),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            (base / ".sessions").exists(),
+            "导入模块不应初始化会话存储（打包后的 worker/MCP 子进程会因此重复初始化）",
+        )
+
+
 class DesktopSessionApiTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(__file__).resolve().parent.parent / f".test_desktop_api_{uuid.uuid4().hex[:8]}"
@@ -106,6 +159,26 @@ class DesktopSessionApiTests(unittest.TestCase):
     def test_session_requires_token(self):
         response = self.client.get("/api/sessions")
         self.assertEqual(response.status_code, 401)
+
+    def test_agents_can_be_filtered_by_session(self):
+        from subagent_store import SubagentStore
+
+        store = SubagentStore(self.root / ".agents")
+        first = store.create("任务 A", session_id="s1")
+        store.create("任务 B", session_id="s2")
+
+        everything = self.client.get("/api/agents", headers=self.headers).json()["agents"]
+        self.assertEqual(len(everything), 2)
+
+        only = self.client.get("/api/agents?session_id=s1", headers=self.headers).json()["agents"]
+        self.assertEqual([item["id"] for item in only], [first.id])
+        self.assertEqual(only[0]["session_id"], "s1")
+
+    def test_cancel_unknown_agent_returns_404(self):
+        response = self.client.post(
+            "/api/agents/agent-20260101-000000-abcd/cancel", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_session_rename(self):
         created = self.client.post(
@@ -249,6 +322,155 @@ class BlockingGraph:
     def stream(self, *args, **kwargs):
         yield ("messages", (FakeChunk(content="等"), {}))
         self.release.wait(timeout=2)
+
+
+class EchoGraph:
+    """把输入消息原样带回，方便断言重生成/编辑后的会话内容。"""
+
+    def stream(self, payload, *args, **kwargs):
+        messages = payload["messages"]
+        yield ("messages", (FakeChunk(content="重"), {}))
+        yield ("values", {"messages": [*messages, AIMessage(content="重来")]})
+
+
+class BoolParsingTests(unittest.TestCase):
+    def test_string_values_are_parsed_strictly(self):
+        self.assertFalse(_as_bool("false"))
+        self.assertFalse(_as_bool("0"))
+        self.assertTrue(_as_bool("true"))
+        self.assertTrue(_as_bool("yes"))
+        self.assertTrue(_as_bool(True))
+        self.assertFalse(_as_bool(None))
+        self.assertTrue(_as_bool("", default=True))
+        self.assertFalse(_as_bool("随便", default=False))
+
+
+class DuplicateToolGraph:
+    """同一个 ToolMessage 同时出现在 messages 和 updates 两个流里。"""
+
+    def stream(self, payload, *args, **kwargs):
+        tool = ToolMessage(content="完成", tool_call_id="call-1", name="read_file")
+        yield ("messages", (tool, {}))
+        yield ("updates", {"tools": {"messages": [tool]}})
+        yield (
+            "values",
+            {"messages": [*payload["messages"], AIMessage(content="好的")]},
+        )
+
+
+class ToolEventDedupTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(__file__).resolve().parent.parent / f".test_tool_end_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.app = create_app(
+            root=self.root,
+            token="t",
+            graph_builder=lambda manager, model_key, extra_tools=None: DuplicateToolGraph(),
+        )
+        self.client = TestClient(self.app)
+        self.headers = {"X-Desktop-Token": "t"}
+
+    def test_tool_end_is_emitted_once_per_call(self):
+        session = self.client.post(
+            "/api/sessions", json={"title": "工具"}, headers=self.headers
+        ).json()
+
+        response = self.client.post(
+            f"/api/sessions/{session['id']}/messages",
+            json={"text": "读文件"},
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.text.count("event: tool_end"), 1)
+
+
+class ConversationEditApiTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(__file__).resolve().parent.parent / f".test_edit_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.app = create_app(
+            root=self.root,
+            token="t",
+            graph_builder=lambda manager, model_key, extra_tools=None: EchoGraph(),
+        )
+        self.client = TestClient(self.app)
+        self.headers = {"X-Desktop-Token": "t"}
+
+    def _create(self) -> str:
+        return self.client.post(
+            "/api/sessions", json={"title": "编辑"}, headers=self.headers
+        ).json()["id"]
+
+    def _send(self, sid: str, body: dict):
+        return self.client.post(
+            f"/api/sessions/{sid}/messages", json=body, headers=self.headers
+        )
+
+    def _messages(self, sid: str) -> list[dict]:
+        return self.client.get(f"/api/sessions/{sid}", headers=self.headers).json()["messages"]
+
+    def test_regenerate_reuses_last_user_message(self):
+        sid = self._create()
+        self._send(sid, {"text": "原始问题"})
+        self.assertEqual([m["role"] for m in self._messages(sid)], ["user", "assistant"])
+
+        response = self._send(sid, {"mode": "regenerate"})
+
+        self.assertEqual(response.status_code, 200)
+        after = self._messages(sid)
+        self.assertEqual([m["role"] for m in after], ["user", "assistant"])
+        self.assertEqual(after[0]["content"], "原始问题")
+
+    def test_edit_replaces_user_message_and_drops_later_turns(self):
+        sid = self._create()
+        self._send(sid, {"text": "原始问题"})
+        self._send(sid, {"text": "第二个问题"})
+        self.assertEqual(len(self._messages(sid)), 4)
+
+        response = self._send(sid, {"text": "改过的问题", "edit_index": 0})
+
+        self.assertEqual(response.status_code, 200)
+        after = self._messages(sid)
+        self.assertEqual(len(after), 2)
+        self.assertEqual([m["role"] for m in after], ["user", "assistant"])
+        self.assertEqual(after[0]["content"], "改过的问题")
+
+    def test_session_detail_supports_paging(self):
+        sid = self._create()
+        for text in ["第一问", "第二问", "第三问"]:
+            self._send(sid, {"text": text})
+        self.assertEqual(len(self._messages(sid)), 6)
+
+        first = self.client.get(
+            f"/api/sessions/{sid}", params={"limit": 2}, headers=self.headers
+        ).json()
+        self.assertEqual(len(first["messages"]), 2)
+        self.assertTrue(first["has_more"])
+        self.assertEqual(first["next_before"], 4)
+
+        second = self.client.get(
+            f"/api/sessions/{sid}", params={"limit": 2, "before": 4}, headers=self.headers
+        ).json()
+        self.assertEqual(len(second["messages"]), 2)
+        self.assertTrue(second["has_more"])
+        self.assertEqual(second["next_before"], 2)
+
+        last = self.client.get(
+            f"/api/sessions/{sid}", params={"limit": 2, "before": 2}, headers=self.headers
+        ).json()
+        self.assertEqual(len(last["messages"]), 2)
+        self.assertFalse(last["has_more"])
+        self.assertEqual(last["next_before"], 0)
+
+    def test_edit_rejects_non_user_message(self):
+        sid = self._create()
+        self._send(sid, {"text": "问题"})
+
+        response = self._send(sid, {"text": "x", "edit_index": 1})
+
+        self.assertEqual(response.status_code, 400)
 
 
 class McpApiTests(unittest.TestCase):

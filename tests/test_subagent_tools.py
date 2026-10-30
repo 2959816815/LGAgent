@@ -14,11 +14,13 @@ class FakeManager:
         self.record = record
         self.error = error
         self.spawned: list[str] = []
+        self.allow_writes: list[bool] = []
 
-    def spawn(self, task: str) -> AgentRecord:
+    def spawn(self, task: str, allow_writes: bool = False) -> AgentRecord:
         if self.error:
             raise SubagentError(self.error)
         self.spawned.append(task)
+        self.allow_writes.append(allow_writes)
         return self.record
 
     def format_table(self) -> str:
@@ -40,6 +42,15 @@ class SubagentToolsTests(unittest.TestCase):
         result = tools["spawn_agent"].invoke({"task": "整理周报"})
         self.assertIn("[已创建]", result)
         self.assertIn(record.id, result)
+
+    def test_spawn_agent_forwards_allow_writes(self):
+        record = AgentRecord(id="agent-20261023-201500-a1b2", task="写文件")
+        manager = FakeManager(record)
+        tools = self._tools(manager)
+
+        tools["spawn_agent"].invoke({"task": "写文件", "allow_writes": True})
+
+        self.assertEqual(manager.allow_writes, [True])
 
     def test_spawn_agent_error(self):
         tools = self._tools(FakeManager(error="已满"))

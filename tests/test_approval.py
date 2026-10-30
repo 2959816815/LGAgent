@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -11,11 +13,36 @@ from approval import (
     ApprovalDenied,
     UndoEmpty,
     build_preview,
+    current_broker,
     set_current,
     undo_last,
     wrap_tools,
 )
 from graph_agent import write_file
+
+
+class BrokerIsolationTests(unittest.TestCase):
+    def test_broker_is_isolated_per_thread(self):
+        first = ApprovalBroker("run-1", "s-1", lambda event, data: None, [])
+        second = ApprovalBroker("run-2", "s-2", lambda event, data: None, [])
+        seen: dict[str, bool] = {}
+
+        def worker(name: str, broker: ApprovalBroker) -> None:
+            set_current(broker)
+            time.sleep(0.1)  # 让两个线程交错执行
+            seen[name] = current_broker() is broker
+            set_current(None)
+
+        threads = [
+            threading.Thread(target=worker, args=("first", first)),
+            threading.Thread(target=worker, args=("second", second)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(seen, {"first": True, "second": True})
 
 
 class ApprovalTests(unittest.TestCase):
@@ -47,6 +74,26 @@ class ApprovalTests(unittest.TestCase):
         )
         self.assertIn("-旧内容", preview["diff"])
         self.assertIn("+新内容", preview["diff"])
+
+    def test_download_file_is_approval_gated(self):
+        from langchain_core.tools import StructuredTool
+
+        executed = []
+
+        def fake_download(path: str) -> str:
+            executed.append(path)
+            return "saved"
+
+        tool = StructuredTool.from_function(
+            func=fake_download, name="download_file", description="下载文件"
+        )
+        wrapped = wrap_tools([tool])[0]
+        self.broker.emit = lambda event, data: self.broker.resolve(data["approval_id"], False)
+
+        result = wrapped.invoke({"path": str(self.target)})
+
+        self.assertTrue(str(result).startswith("[错误]"))
+        self.assertEqual(executed, [])
 
     def test_reject_blocks_write(self):
         self.target.write_text("before", encoding="utf-8")

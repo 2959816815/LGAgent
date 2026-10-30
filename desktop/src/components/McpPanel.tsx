@@ -141,13 +141,25 @@ export function McpPanel(props: {
               ))}
             </select>
           </label>
-          {server.error && <div className="mcp-error">{server.error}</div>}
+          {server.last_error && <div className="mcp-error">{server.last_error}</div>}
           <div className="mcp-actions">
-            <button onClick={() => props.onRestart(server.id)}>重试</button>
-            <button onClick={() => props.onToggle(server.id, !server.enabled)}>
+            <button
+              disabled={server.status === "starting"}
+              onClick={() => props.onRestart(server.id)}
+            >
+              重试
+            </button>
+            <button
+              disabled={server.status === "starting"}
+              onClick={() => props.onToggle(server.id, !server.enabled)}
+            >
               {server.enabled ? "停用" : "启用"}
             </button>
-            <button className="danger" onClick={() => props.onRemove(server.id)}>
+            <button
+              className="danger"
+              disabled={server.status === "starting"}
+              onClick={() => props.onRemove(server.id)}
+            >
               移除
             </button>
           </div>

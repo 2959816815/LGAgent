@@ -38,6 +38,7 @@ from session_store import (
     _iso,
     _now,
     clean_title,
+    message_text,
     sanitize_messages,
 )
 
@@ -62,6 +63,15 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS state (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+-- 全文索引：trigram 分词支持中文子串匹配（SQLite >= 3.34）
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    session_id UNINDEXED,
+    seq        UNINDEXED,
+    role       UNINDEXED,
+    content,
+    tokenize = 'trigram'
 );
 """
 
@@ -98,6 +108,26 @@ class SqliteSessionStore:
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             elif version != SCHEMA_VERSION:
                 raise SessionStoreError(f"不支持的数据库版本: {version}")
+            self._backfill_search_index(connection)
+
+    def _backfill_search_index(self, connection: sqlite3.Connection) -> None:
+        """旧库升级：首次引入全文索引时，把已有消息补进去。"""
+        indexed = connection.execute("SELECT count(*) FROM messages_fts").fetchone()[0]
+        stored = connection.execute("SELECT count(*) FROM messages").fetchone()[0]
+        if indexed or not stored:
+            return
+        rows = connection.execute("SELECT session_id, seq, payload FROM messages").fetchall()
+        for session_id, seq, payload in rows:
+            try:
+                message = messages_from_dict([json.loads(payload)])[0]
+            except Exception:  # noqa: BLE001
+                continue
+            text = message_text(message)
+            if text:
+                connection.execute(
+                    "INSERT INTO messages_fts(session_id, seq, role, content) VALUES(?, ?, ?, ?)",
+                    (session_id, seq, getattr(message, "type", "message"), text),
+                )
 
     @staticmethod
     def _validate_id(session_id: str) -> None:
@@ -183,6 +213,18 @@ class SqliteSessionStore:
                 ),
             )
             connection.execute("DELETE FROM messages WHERE session_id = ?", (session.id,))
+            connection.execute("DELETE FROM messages_fts WHERE session_id = ?", (session.id,))
+            search_rows = []
+            for index, message in enumerate(messages):
+                text = message_text(message)
+                if text:
+                    search_rows.append(
+                        (session.id, index, getattr(message, "type", "message"), text)
+                    )
+            connection.executemany(
+                "INSERT INTO messages_fts(session_id, seq, role, content) VALUES(?, ?, ?, ?)",
+                search_rows,
+            )
             connection.executemany(
                 "INSERT INTO messages(session_id, seq, payload) VALUES(?, ?, ?)",
                 [
@@ -273,12 +315,53 @@ class SqliteSessionStore:
             for row in rows
         ]
 
+    def search(self, query: str, limit: int = 20) -> list[dict]:
+        """在消息全文索引里搜索，返回 {session_id, message_index, role, snippet}。"""
+        needle = (query or "").strip()
+        if not needle or limit <= 0:
+            return []
+        with self._connect() as connection:
+            if len(needle) >= 3:
+                # trigram 分词：整句加引号当作短语，按相关度排序。
+                expression = '"' + needle.replace('"', '""') + '"'
+                rows = connection.execute(
+                    "SELECT session_id, seq, role, content FROM messages_fts "
+                    "WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (expression, limit),
+                ).fetchall()
+            else:
+                # trigram 至少要 3 个字符，短查询退回 LIKE。
+                rows = connection.execute(
+                    "SELECT session_id, seq, role, content FROM messages_fts "
+                    "WHERE content LIKE ? LIMIT ?",
+                    (f"%{needle}%", limit),
+                ).fetchall()
+
+        results: list[dict] = []
+        lowered = needle.casefold()
+        for session_id, seq, role, content in rows:
+            text = content or ""
+            position = text.casefold().find(lowered)
+            start = max(0, position - 32) if position >= 0 else 0
+            end = min(len(text), (position if position >= 0 else 0) + len(needle) + 64)
+            snippet = ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+            results.append(
+                {
+                    "session_id": session_id,
+                    "message_index": int(seq),
+                    "role": role,
+                    "snippet": snippet,
+                }
+            )
+        return results
+
     def delete(self, session_id: str) -> None:
         self._validate_id(session_id)
         with self._connect() as connection:
             cursor = connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             if cursor.rowcount == 0:
                 raise SessionStoreError(f"会话不存在: {session_id}")
+            connection.execute("DELETE FROM messages_fts WHERE session_id = ?", (session_id,))
         if self.get_active_id() == session_id:
             self.set_active_id(None)
 

@@ -23,6 +23,7 @@ class FakeMcp:
         self.fail_startup = fail_startup
         self.restart_calls = []
         self.enabled_calls = []
+        self.background_flags = []
         self.extra_tools_seen = []
         self.status = McpServerStatus(
             id="playwright",
@@ -45,12 +46,14 @@ class FakeMcp:
     def list_servers(self):
         return [self.status]
 
-    def restart(self, server_id):
+    def restart(self, server_id, background: bool = False):
         self.restart_calls.append(server_id)
+        self.background_flags.append(("restart", background))
         return self.status
 
-    def set_enabled(self, server_id, enabled):
+    def set_enabled(self, server_id, enabled, background: bool = False):
         self.enabled_calls.append((server_id, enabled))
+        self.background_flags.append(("enable", background))
         return self.status
 
     def enabled_ids(self):
@@ -69,6 +72,26 @@ class FakeMcp:
 
     def permission_for(self, server_id, tool=None):
         return "ask"
+
+
+class McpStartupTests(unittest.TestCase):
+    def test_startup_does_not_wait_for_mcp(self) -> None:
+        import time
+
+        class SlowMcp(FakeMcp):
+            def start_enabled(self):
+                time.sleep(1.0)
+
+        root = Path(__file__).resolve().parent.parent / f".test_mcp_start_{uuid.uuid4().hex[:8]}"
+        root.mkdir()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        app = create_app(root=root, token="t", mcp_manager=SlowMcp())
+
+        started = time.monotonic()
+        with TestClient(app):
+            elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 0.5, "启动阶段不应等待 MCP 服务器握手")
 
 
 class CapturingGraph:
@@ -117,6 +140,19 @@ class McpApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(mcp.enabled_calls, [("playwright", False)])
+
+    def test_enable_and_restart_run_in_background(self):
+        mcp = FakeMcp()
+        client = TestClient(self._app(mcp=mcp))
+
+        client.post(
+            "/api/mcp/servers/playwright/enable",
+            json={"enabled": True},
+            headers=self.headers,
+        )
+        client.post("/api/mcp/servers/playwright/restart", headers=self.headers)
+
+        self.assertEqual(mcp.background_flags, [("enable", True), ("restart", True)])
 
     def test_graph_receives_mcp_tools(self):
         captured = []

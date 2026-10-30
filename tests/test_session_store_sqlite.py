@@ -29,6 +29,34 @@ class SqliteSessionStoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
 
+    def test_search_finds_message_text(self) -> None:
+        session = self.store.create("搜索测试")
+        session.messages.append(HumanMessage(content="请帮我整理季度报告"))
+        session.messages.append(AIMessage(content="好的，我来整理"))
+        self.store.save(session)
+
+        hits = self.store.search("季度报告")
+
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["session_id"], session.id)
+        self.assertEqual(hits[0]["message_index"], 0)
+        self.assertEqual(hits[0]["role"], "human")
+        self.assertIn("季度报告", hits[0]["snippet"])
+
+    def test_search_follows_edits_and_deletes(self) -> None:
+        session = self.store.create("编辑测试")
+        session.messages.append(HumanMessage(content="旧的季度报告内容"))
+        self.store.save(session)
+        self.assertEqual(len(self.store.search("旧的季度报告")), 1)
+
+        session.messages[0] = HumanMessage(content="全新的年度总结")
+        self.store.save(session)
+        self.assertEqual(self.store.search("旧的季度报告"), [])
+        self.assertEqual(len(self.store.search("年度总结")), 1)
+
+        self.store.delete(session.id)
+        self.assertEqual(self.store.search("年度总结"), [])
+
     def test_create_save_load_roundtrip(self) -> None:
         session = self.store.create("  我的 会话  ", model_key="deepseek")
         session.messages.append(HumanMessage(content="你好"))

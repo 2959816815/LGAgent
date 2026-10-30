@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
   addMcpServer,
+  cancelAgent,
   cancelRun,
   createSession,
   deleteSession,
@@ -40,6 +41,9 @@ import type {
 } from "./types";
 import { markdownToHtml } from "./markdown";
 import { McpPanel } from "./components/McpPanel";
+import { SettingsDialog } from "./components/SettingsDialog";
+
+const HISTORY_PAGE = 200;
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -72,7 +76,18 @@ function timeLabel(value: string): string {
 function statusLabel(status: AgentRecord["status"]): string {
   if (status === "running") return "运行中";
   if (status === "succeeded") return "已完成";
+  if (status === "cancelled") return "已取消";
   return "失败";
+}
+
+/** 最后一条助手消息的下标；如果末尾是用户消息（还没有回复）则返回 -1。 */
+function lastAssistantIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const role = messages[index].role;
+    if (role === "assistant") return index;
+    if (role === "user") return -1;
+  }
+  return -1;
 }
 
 function Sidebar(props: {
@@ -83,6 +98,7 @@ function Sidebar(props: {
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  onSettings: () => void;
 }) {
   const [hits, setHits] = useState<SessionSearchResult[]>([]);
   useEffect(() => {
@@ -179,6 +195,9 @@ function Sidebar(props: {
       </div>
       <div className="sidebar-footer">
         <span className="status-dot" /> 本地服务已连接
+        <button className="diag-button" type="button" onClick={props.onSettings}>
+          设置
+        </button>
         <button
           className="diag-button"
           type="button"
@@ -258,6 +277,10 @@ function Chat(props: {
   onRename: (title: string) => void;
   onApproval: (approved: boolean) => void;
   onUndo: () => void;
+  onRegenerate: () => void;
+  onEditMessage: (index: number, text: string) => void;
+  hasEarlier: boolean;
+  onLoadEarlier: () => void;
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -265,6 +288,9 @@ function Chat(props: {
   const [dragging, setDragging] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [editingMessage, setEditingMessage] = useState<{ index: number; text: string } | null>(
+    null,
+  );
   const [mention, setMention] = useState<{ query: string; start: number; end: number } | null>(
     null,
   );
@@ -398,6 +424,13 @@ function Chat(props: {
       </header>
 
       <div className="message-scroll">
+        {props.hasEarlier && (
+          <div className="load-earlier">
+            <button type="button" onClick={props.onLoadEarlier}>
+              加载更早的消息
+            </button>
+          </div>
+        )}
         {props.messages.length === 0 && !props.streaming && (
           <div className="welcome">
             <h2>今天想做什么？</h2>
@@ -413,6 +446,42 @@ function Chat(props: {
               </div>
             );
           }
+          if (message.role === "user" && editingMessage?.index === index) {
+            return (
+              <div key={`${message.role}-${index}`} className="message user">
+                <div className="avatar">你</div>
+                <div className="bubble">
+                  <textarea
+                    className="edit-box"
+                    aria-label="编辑消息"
+                    value={editingMessage.text}
+                    onChange={(event) =>
+                      setEditingMessage({ index, text: event.target.value })
+                    }
+                  />
+                  <div className="message-actions">
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={props.streaming || !editingMessage.text.trim()}
+                      onClick={() => {
+                        const text = editingMessage.text;
+                        setEditingMessage(null);
+                        props.onEditMessage(index, text);
+                      }}
+                    >
+                      保存并重发
+                    </button>
+                    <button type="button" onClick={() => setEditingMessage(null)}>
+                      取消
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          const isLastAssistant =
+            message.role === "assistant" && index === lastAssistantIndex(props.messages);
           return (
             <div key={`${message.role}-${index}`} className={`message ${message.role}`}>
               <div className="avatar">{message.role === "user" ? "你" : "◆"}</div>
@@ -439,6 +508,24 @@ function Chat(props: {
                     ))}
                   </div>
                 ) : null}
+                {message.role === "user" && (
+                  <div className="message-actions">
+                    <button
+                      type="button"
+                      disabled={props.streaming}
+                      onClick={() => setEditingMessage({ index, text: message.content })}
+                    >
+                      编辑
+                    </button>
+                  </div>
+                )}
+                {isLastAssistant && (
+                  <div className="message-actions">
+                    <button type="button" disabled={props.streaming} onClick={props.onRegenerate}>
+                      重新生成
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -801,6 +888,7 @@ function RightPanel(props: {
   onRemoveMcp: (id: string) => void;
   onMcpPermission: (id: string, permission: string) => void;
   onInsertPath: (path: string) => void;
+  onCancelAgent: (id: string) => void;
 }) {
   const [tab, setTab] = useState<"tasks" | "tools" | "context" | "files" | "mcp">("tasks");
   const running = props.agents.filter((agent) => agent.status === "running").length;
@@ -845,6 +933,15 @@ function RightPanel(props: {
                 <span className="agent-task">{agent.task}</span>
                 <span className="agent-state">{statusLabel(agent.status)}</span>
               </div>
+              {agent.status === "running" && (
+                <button
+                  className="agent-cancel"
+                  type="button"
+                  onClick={() => props.onCancelAgent(agent.id)}
+                >
+                  取消
+                </button>
+              )}
               <div className="agent-meta">
                 {agent.id} · {timeLabel(agent.created_at)}
               </div>
@@ -985,6 +1082,11 @@ export function App() {
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [undoing, setUndoing] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [earlier, setEarlier] = useState<{ hasMore: boolean; nextBefore: number | null }>({
+    hasMore: false,
+    nextBefore: null,
+  });
   const abortRef = useRef<AbortController | null>(null);
   const streamSeq = useRef(0);
   const viewSeq = useRef(0);
@@ -1012,17 +1114,36 @@ export function App() {
   async function selectSession(id: string): Promise<void> {
     const seq = ++viewSeq.current;
     cancelActiveStream();
-    const data = await getSession(id);
+    const data = await getSession(id, { limit: HISTORY_PAGE });
     if (seq !== viewSeq.current) return;
     setActiveId(id);
     setDetail(data);
     setMessages(data.messages);
+    setEarlier({ hasMore: Boolean(data.has_more), nextBefore: data.next_before ?? null });
     setStreamText("");
     setError("");
     setAttachments([]);
     setApproval(null);
     setTools([]);
     setUndoAvailable(false);
+  }
+
+  async function loadEarlier(): Promise<void> {
+    if (!detail || !earlier.hasMore || earlier.nextBefore === null) return;
+    const sessionId = detail.id;
+    try {
+      const page = await getSession(sessionId, {
+        limit: HISTORY_PAGE,
+        before: earlier.nextBefore,
+      });
+      setMessages((prev) => [...page.messages, ...prev]);
+      setEarlier({
+        hasMore: Boolean(page.has_more),
+        nextBefore: page.next_before ?? null,
+      });
+    } catch (cause) {
+      setError(errorText(cause));
+    }
   }
 
   async function newSession(): Promise<void> {
@@ -1034,6 +1155,7 @@ export function App() {
     setActiveId(created.id);
     setDetail(created);
     setMessages([]);
+    setEarlier({ hasMore: false, nextBefore: null });
     setStreamText("");
     setError("");
     setAttachments([]);
@@ -1055,9 +1177,18 @@ export function App() {
 
   async function loadAgents(): Promise<void> {
     try {
-      setAgents(await listAgents());
+      setAgents(await listAgents(activeId ?? undefined));
     } catch {
       // 右栏状态不是主流程，静默失败
+    }
+  }
+
+  async function cancelAgentAndRefresh(id: string): Promise<void> {
+    try {
+      await cancelAgent(id);
+      await loadAgents();
+    } catch (cause) {
+      setError(errorText(cause));
     }
   }
 
@@ -1140,27 +1271,26 @@ export function App() {
     }
   }
 
-  async function send(): Promise<void> {
-    const text = input.trim();
-    if (!detail || (!text && attachments.length === 0) || streaming || abortRef.current) return;
-    if (attachments.length > 0 && !currentModel?.supports_vision) {
-      setError("当前模型不支持图片，请切换到千问 VL");
-      return;
-    }
-    const outgoing = attachments;
-    const sessionId = detail.id;
+  async function executeRun(options: {
+    sessionId: string;
+    text: string;
+    outgoing: Attachment[];
+    mode?: "regenerate";
+    editIndex?: number;
+  }): Promise<void> {
+    const { sessionId, text, outgoing } = options;
     const seq = ++streamSeq.current;
-    setInput("");
-    setAttachments([]);
     setError("");
-    setMessages((prev) => [...prev, { role: "user", content: text, attachments: outgoing }]);
     setStreaming(true);
     setStreamText("");
     setTools([]);
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      for await (const event of streamMessage(sessionId, text, controller.signal, outgoing)) {
+      for await (const event of streamMessage(sessionId, text, controller.signal, outgoing, {
+        mode: options.mode,
+        editIndex: options.editIndex,
+      })) {
         if (seq !== streamSeq.current) break;
         if (event.event === "token") {
           const id = String(event.data.run_id ?? "");
@@ -1216,6 +1346,48 @@ export function App() {
       await refreshSessions().catch(() => undefined);
       await loadAgents();
     }
+  }
+
+  async function send(): Promise<void> {
+    const text = input.trim();
+    if (!detail || (!text && attachments.length === 0) || streaming || abortRef.current) return;
+    if (attachments.length > 0 && !currentModel?.supports_vision) {
+      setError("当前模型不支持图片，请切换到千问 VL");
+      return;
+    }
+    const outgoing = attachments;
+    const sessionId = detail.id;
+    setInput("");
+    setAttachments([]);
+    setMessages((prev) => [...prev, { role: "user", content: text, attachments: outgoing }]);
+    await executeRun({ sessionId, text, outgoing });
+  }
+
+  async function regenerate(): Promise<void> {
+    if (!detail || streaming || abortRef.current) return;
+    setMessages((prev) => {
+      const lastUser = prev.map((message) => message.role).lastIndexOf("user");
+      return lastUser >= 0 ? prev.slice(0, lastUser + 1) : prev;
+    });
+    await executeRun({ sessionId: detail.id, text: "", outgoing: [], mode: "regenerate" });
+  }
+
+  async function editAndResend(index: number, text: string): Promise<void> {
+    const value = text.trim();
+    if (!detail || streaming || abortRef.current || !value) return;
+    setMessages((prev) =>
+      prev
+        .slice(0, index + 1)
+        .map((message, i) =>
+          i === index ? { ...message, content: value, attachments: [] } : message,
+        ),
+    );
+    await executeRun({
+      sessionId: detail.id,
+      text: value,
+      outgoing: [],
+      editIndex: index,
+    });
   }
 
   async function decideApproval(approved: boolean): Promise<void> {
@@ -1285,7 +1457,7 @@ export function App() {
     void loadAgents();
     const timer = window.setInterval(() => void loadAgents(), 2000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [activeId]);
 
   useEffect(() => {
     void refreshMcp();
@@ -1303,6 +1475,7 @@ export function App() {
         onSelect={(id) => void selectSession(id)}
         onNew={() => void newSession()}
         onDelete={(id) => void removeSession(id)}
+        onSettings={() => setSettingsOpen(true)}
       />
       <Chat
         session={detail}
@@ -1330,6 +1503,10 @@ export function App() {
         onRename={(title) => void renameCurrent(title)}
         onApproval={(approved) => void decideApproval(approved)}
         onUndo={() => void undoLastWrite()}
+        onRegenerate={() => void regenerate()}
+        onEditMessage={(index, text) => void editAndResend(index, text)}
+        hasEarlier={earlier.hasMore}
+        onLoadEarlier={() => void loadEarlier()}
       />
       <RightPanel
         session={detail}
@@ -1347,7 +1524,24 @@ export function App() {
           void setPermission(id, permission).catch((cause) => setError(errorText(cause)))
         }
         onInsertPath={(path) => insertPaths([path])}
+        onCancelAgent={(id) => void cancelAgentAndRefresh(id)}
       />
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          onSaved={() => {
+            setSettingsOpen(false);
+            void (async () => {
+              try {
+                await initApi();
+                setModels(await listModels());
+              } catch (cause) {
+                setError(errorText(cause));
+              }
+            })();
+          }}
+        />
+      )}
     </div>
   );
 }

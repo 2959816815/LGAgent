@@ -49,6 +49,13 @@ let quitting = false;
 let restarting = false;
 let restartTimer = null;
 
+// 必须先确定数据目录，再申请单实例锁：锁文件与 Chromium 的缓存都写在
+// userData 下，目录不可写会导致锁失败、渲染进程网络服务起不来。
+bootLog("before resolveUserData");
+app.setPath("userData", resolveUserData());
+bootLog("after resolveUserData");
+app.setPath("sessionData", app.getPath("userData"));
+
 // 多开会让每个实例都启动一个 sidecar；后启动的实例会把正在运行的子 agent
 // 误判为“主程序重启”。只允许一个实例，第二次启动时聚焦已有窗口。
 const singleInstanceLock = app.requestSingleInstanceLock();
@@ -81,6 +88,9 @@ function resolveUserData() {
     process.env.LANGGRAPH_DATA_DIR,
     path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "langgraph-agent"),
     path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "langgraph-agent"),
+    // 开发模式：不要把数据写进 electron 的 dist —— 打包时整个 dist 会被拷贝，
+    // 运行中的 Cookies 等文件被占用会直接让打包失败（EBUSY）。
+    app.isPackaged ? null : path.join(PROJECT_ROOT, ".desktop-data"),
     path.join(path.dirname(process.execPath), "data"),
     path.join(os.tmpdir(), "langgraph-agent"),
   ].filter(Boolean);
@@ -92,10 +102,6 @@ function resolveUserData() {
   );
 }
 
-bootLog("before resolveUserData");
-app.setPath("userData", resolveUserData());
-bootLog("after resolveUserData");
-app.setPath("sessionData", app.getPath("userData"));
 nativeTheme.themeSource = "dark";
 
 function ensureShortcuts() {
@@ -217,17 +223,42 @@ function scheduleSidecarRestart(reason) {
   }, delay);
 }
 
+// 每个进程固定一次：sidecar 重启后端口会变，但 token 不变，
+// 这样保存设置重启后端时界面不会因为 token 轮换而 401。
+const DESKTOP_TOKEN = crypto.randomBytes(24).toString("hex");
+
 function startBackend() {
   return new Promise((resolve, reject) => {
-    const token = crypto.randomBytes(24).toString("hex");
+    const token = DESKTOP_TOKEN;
     const invocation = sidecarCommand();
     if (!invocation) {
       reject(new Error("找不到 Python，请设置 DSH_PYTHON"));
       return;
     }
     const saved = settingsStore.getDeepSeek();
-    const sidecarTemp = path.join(path.dirname(process.execPath), "data", "tmp");
+    // 工作区：文件面板、@ 引用和 Agent 的相对路径都以它为根。
+    // 开发期用项目根；打包后用一个独立目录，避免指向 sidecar 的 _internal。
+    let workspace = app.isPackaged
+      ? path.join(app.getPath("userData"), "workspace")
+      : PROJECT_ROOT;
+    try {
+      fs.mkdirSync(workspace, { recursive: true });
+    } catch {
+      workspace = app.getPath("userData");
+    }
+    // 临时目录放在用户数据目录，而不是安装目录：装到 Program Files 时
+    // 安装目录通常不可写，会导致 sidecar 启动即失败。
+    const sidecarTemp = path.join(app.getPath("userData"), "tmp");
     fs.mkdirSync(sidecarTemp, { recursive: true });
+    // npx 型 MCP 服务器（Playwright / GitHub）需要可写的 npm 缓存。默认位置是
+    // %LOCALAPPDATA%\npm-cache，在工作区被限制为低完整性时会 mkdir 失败（EPERM），
+    // 所以统一指到用户数据目录下。
+    const npmCache = path.join(app.getPath("userData"), "npm-cache");
+    try {
+      fs.mkdirSync(npmCache, { recursive: true });
+    } catch {
+      // 目录建不出来时退回默认缓存位置
+    }
     const logDir = path.join(app.getPath("userData"), "logs");
     fs.mkdirSync(logDir, { recursive: true });
     const logPath = path.join(logDir, "sidecar.log");
@@ -241,11 +272,12 @@ function startBackend() {
 
     const startedAt = Date.now();
     backend = spawn(invocation.command, invocation.args, {
-      cwd: app.isPackaged ? app.getPath("userData") : PROJECT_ROOT,
+      cwd: workspace,
       env: {
         ...process.env,
         DSH_DESKTOP_TOKEN: token,
         DSH_DATA_DIR: app.getPath("userData"),
+        DSH_WORKSPACE: workspace,
         DSH_SESSION_STORE: "sqlite",
         LLM_PROVIDER: "deepseek",
         DEEPSEEK_API_KEY: saved?.apiKey || "",
@@ -254,6 +286,8 @@ function startBackend() {
         TEMP: sidecarTemp,
         TMP: sidecarTemp,
         TMPDIR: sidecarTemp,
+        npm_config_cache: npmCache,
+        NPM_CONFIG_CACHE: npmCache,
         PLAYWRIGHT_BROWSERS_PATH: path.join(sidecarTemp, "playwright-browsers"),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -389,7 +423,11 @@ async function createWindow() {
   if (app.isPackaged) {
     await mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
   } else {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL || "http://localhost:5173");
+    // 用 127.0.0.1 而不是 localhost：部分机器上 localhost 只解析到 ::1，
+    // 而 Vite 绑定的是 IPv4，Chromium 会直接 ERR_FAILED。
+    await mainWindow.loadURL(
+      process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5173",
+    );
   }
   mainWindow.setBounds({ x, y, width, height });
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -424,6 +462,33 @@ ipcMain.handle("desktop:export-diagnostics", async () => {
 
 ipcMain.handle("desktop:config", () => config);
 
+ipcMain.handle("desktop:get-settings", () => {
+  const saved = settingsStore.getDeepSeek();
+  return {
+    baseUrl: saved?.baseUrl || DEFAULTS.baseUrl,
+    model: saved?.model || DEFAULTS.model,
+    hasApiKey: Boolean(saved?.apiKey),
+  };
+});
+
+ipcMain.handle("desktop:test-settings", async (_event, payload) => {
+  const saved = settingsStore.getDeepSeek();
+  const apiKey = String(payload?.apiKey || "").trim() || saved?.apiKey || "";
+  return testDeepSeek({
+    apiKey,
+    baseUrl: payload?.baseUrl,
+    model: payload?.model,
+  });
+});
+
+ipcMain.handle("desktop:save-settings", async (_event, payload) => {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("当前系统不支持安全存储，无法保存 API Key");
+  }
+  settingsStore.saveSettings(payload || {});
+  return restartBackend();
+});
+
 ipcMain.handle("desktop:setup-state", () => {
   const saved = settingsStore.getDeepSeek();
   return {
@@ -445,12 +510,37 @@ ipcMain.handle("desktop:save-deepseek", async (_event, payload) => {
   return restartBackend();
 });
 
+async function createWindowWithRetry() {
+  for (;;) {
+    try {
+      await createWindow();
+      bootLog("window created");
+      return;
+    } catch (error) {
+      bootLog("window creation failed", error);
+      console.error(error);
+      const choice = dialog.showMessageBoxSync({
+        type: "error",
+        title: "LangGraph Agent 启动失败",
+        message: "本地服务没能启动",
+        detail: String(error?.message ?? error),
+        buttons: ["重试", "退出"],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (choice !== 0) {
+        app.quit();
+        return;
+      }
+    }
+  }
+}
+
 app.whenReady().then(async () => {
   bootLog("app ready");
   ensureShortcuts();
   initSettings();
-  await createWindow();
-  bootLog("window created");
+  await createWindowWithRetry();
 }).catch((error) => {
   bootLog("whenReady failed", error);
   console.error(error);

@@ -51,6 +51,52 @@ class McpManagerTests(unittest.TestCase):
         self.managers.append(manager)
         return manager
 
+    def test_default_config_starts_playwright_without_sandbox(self) -> None:
+        manager = self._manager()
+
+        servers = manager._servers()
+
+        self.assertEqual(servers[0]["id"], "playwright")
+        self.assertIn("--no-sandbox", servers[0]["command"])
+
+    def test_failure_reason_is_logged_to_stderr(self) -> None:
+        import contextlib
+        import io
+
+        self._config([self._fake("demo", True, command=["definitely-not-a-real-command"])])
+        manager = self._manager()
+        buffer = io.StringIO()
+
+        with contextlib.redirect_stderr(buffer):
+            with self.assertRaises(McpManagerError):
+                manager._launch("demo")
+
+        self.assertIn("demo", buffer.getvalue())
+
+    def test_set_enabled_background_returns_starting(self) -> None:
+        self._config([self._fake("demo", False)])
+        manager = self._manager()
+        original = manager._launch
+
+        def slow(server_id):
+            time.sleep(0.8)
+            return original(server_id)
+
+        manager._launch = slow
+        started = time.monotonic()
+        status = manager.set_enabled("demo", True, background=True)
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 0.3, "启用按钮不应等待握手完成")
+        self.assertEqual(status.status, "starting")
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if manager.list_servers()[0].status != "starting":
+                break
+            time.sleep(0.05)
+        self.assertEqual(manager.list_servers()[0].status, "running")
+
     def test_enabled_ids_and_tool_specs(self) -> None:
         self._config([self._fake("demo", True), self._fake("off", False)])
         manager = self._manager()

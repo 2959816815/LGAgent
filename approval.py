@@ -6,6 +6,7 @@ CLI 没有 broker 时工具照旧直接执行；桌面端在 run_graph 里注入
 
 from __future__ import annotations
 
+import contextvars
 import difflib
 import json
 import shutil
@@ -21,6 +22,7 @@ from langchain_core.tools import StructuredTool
 WRITE_TOOL_NAMES = {
     "write_file",
     "edit_file",
+    "download_file",
     "write_docx",
     "edit_docx",
     "write_xlsx",
@@ -32,6 +34,7 @@ WRITE_TOOL_NAMES = {
 TITLES = {
     "write_file": "写入文件",
     "edit_file": "修改文件",
+    "download_file": "下载文件",
     "write_docx": "写入 Word 文档",
     "edit_docx": "修改 Word 文档",
     "write_xlsx": "写入 Excel 表格",
@@ -40,8 +43,11 @@ TITLES = {
     "edit_pptx": "修改 PPT 演示文稿",
 }
 
-_ACTIVE: "ApprovalBroker | None" = None
-_ACTIVE_LOCK = threading.Lock()
+# 用 ContextVar 而不是全局变量：每个会话的 run 在独立线程里执行，
+# 并发时各自的审批/撤销互不串台。
+_ACTIVE: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
+    "approval_broker", default=None
+)
 
 
 class ApprovalDenied(Exception):
@@ -72,14 +78,11 @@ class _Pending:
 
 
 def current_broker() -> "ApprovalBroker | None":
-    with _ACTIVE_LOCK:
-        return _ACTIVE
+    return _ACTIVE.get()
 
 
 def set_current(broker: "ApprovalBroker | None") -> None:
-    global _ACTIVE
-    with _ACTIVE_LOCK:
-        _ACTIVE = broker
+    _ACTIVE.set(broker)
 
 
 def _target_path(args: dict) -> Path:

@@ -29,6 +29,27 @@ test("saves and reads DeepSeek settings without plaintext key", () => {
   assert.equal(fs.readFileSync(store.filePath, "utf8").includes("sk-test"), false);
 });
 
+test("updates base url and model without replacing the saved key", () => {
+  const store = tempStore();
+  store.saveDeepSeek({ apiKey: "sk-old", baseUrl: DEFAULTS.baseUrl, model: DEFAULTS.model });
+
+  store.saveSettings({ apiKey: "", baseUrl: "https://example.com", model: "deepseek-v4-pro" });
+
+  const saved = store.getDeepSeek();
+  assert.equal(saved.apiKey, "sk-old");
+  assert.equal(saved.baseUrl, "https://example.com");
+  assert.equal(saved.model, "deepseek-v4-pro");
+});
+
+test("saveSettings replaces the key when one is provided", () => {
+  const store = tempStore();
+  store.saveDeepSeek({ apiKey: "sk-old" });
+
+  store.saveSettings({ apiKey: "sk-new", baseUrl: DEFAULTS.baseUrl, model: DEFAULTS.model });
+
+  assert.equal(store.getDeepSeek().apiKey, "sk-new");
+});
+
 test("rejects empty api key", () => {
   const store = tempStore();
   assert.throws(() => store.saveDeepSeek({ apiKey: "  " }), /API Key/);

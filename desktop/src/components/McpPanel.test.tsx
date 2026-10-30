@@ -18,7 +18,7 @@ describe("McpPanel", () => {
             enabled: true,
             permission: "ask",
             tool_count: 23,
-            error: null,
+            last_error: null,
           },
         ]}
         catalog={[]}
@@ -35,6 +35,58 @@ describe("McpPanel", () => {
     expect(onToggle).toHaveBeenCalledWith("playwright", false);
     fireEvent.click(screen.getByText("重试"));
     expect(onRestart).toHaveBeenCalledWith("playwright");
+  });
+
+  it("disables actions while a server is starting", () => {
+    render(
+      <McpPanel
+        servers={[
+          {
+            id: "booting",
+            name: "启动中的服务",
+            status: "starting",
+            enabled: true,
+            permission: "ask",
+            tool_count: 0,
+            last_error: null,
+          },
+        ]}
+        catalog={[]}
+        onRestart={vi.fn()}
+        onToggle={vi.fn()}
+        onAdd={vi.fn(async () => {})}
+        onRemove={vi.fn()}
+        onPermission={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("启动中")).toBeTruthy();
+    expect((screen.getByText("重试") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("停用") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows why a server failed", () => {
+    render(
+      <McpPanel
+        servers={[
+          {
+            id: "broken",
+            name: "失败的服务器",
+            status: "failed",
+            enabled: true,
+            permission: "ask",
+            tool_count: 0,
+            last_error: "握手超时",
+          },
+        ]}
+        catalog={[]}
+        onRestart={vi.fn()}
+        onToggle={vi.fn()}
+        onAdd={vi.fn(async () => {})}
+        onRemove={vi.fn()}
+        onPermission={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("握手超时")).toBeTruthy();
   });
 
   it("adds a preset with its required fields", async () => {

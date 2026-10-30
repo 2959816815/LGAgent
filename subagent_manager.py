@@ -8,7 +8,13 @@ import time
 from pathlib import Path
 
 from subagent_cli import format_agent_notification, format_agent_table
-from subagent_store import AgentRecord, SubagentStore, SubagentStoreError, now_iso
+from subagent_store import (
+    AGENT_ID_RE,
+    AgentRecord,
+    SubagentStore,
+    SubagentStoreError,
+    now_iso,
+)
 
 from model_registry import initial_model_key, resolve_selector
 
@@ -46,6 +52,7 @@ class SubagentManager:
         self.max_running = max_running
         self.poll_interval = poll_interval
         self._model_key = resolve_selector(model_key or initial_model_key())
+        self._current_session = ""
         self._processes: dict[str, subprocess.Popen] = {}
         self._notified: set[str] = set()
         self._notifications: list[str] = []
@@ -56,7 +63,7 @@ class SubagentManager:
         # 启动时已经完成的记录属于历史，不能在启动时重新播报。
         # 只通知本次 Manager 生命周期内新完成的子 agent。
         for existing in self.store.list_records():
-            if existing.status in {"succeeded", "failed"}:
+            if existing.status in {"succeeded", "failed", "cancelled"}:
                 self._notified.add(existing.id)
 
     def _fail_orphans(self) -> None:
@@ -82,7 +89,16 @@ class SubagentManager:
         """切换后续新建子 agent 使用的模型；运行中的不受影响。"""
         self._model_key = resolve_selector(key)
 
-    def spawn(self, task: str) -> AgentRecord:
+    def set_current_session(self, session_id: str) -> None:
+        """记录当前会话，新创建的子 agent 归属于它（用于按会话展示）。"""
+        self._current_session = session_id or ""
+
+    def spawn(
+        self,
+        task: str,
+        session_id: str | None = None,
+        allow_writes: bool = False,
+    ) -> AgentRecord:
         task = task.strip()
         if not task:
             raise SubagentError("任务不能为空")
@@ -91,7 +107,7 @@ class SubagentManager:
         if self.running_count() >= self.max_running:
             raise SubagentError(f"当前已有 {self.max_running} 个子 agent 在运行")
 
-        record = self.store.create(task)
+        record = self.store.create(task, session_id=session_id or self._current_session)
         log_path = self.project_root / ".agents" / f"{record.id}.log"
         try:
             with open(log_path, "a", encoding="utf-8") as log:
@@ -105,16 +121,19 @@ class SubagentManager:
                     if getattr(sys, "frozen", False)
                     else [sys.executable, str(self.worker_path)]
                 )
+                worker_args = [
+                    *command,
+                    "--model-key",
+                    self._model_key,
+                    "--agent-id",
+                    record.id,
+                    "--project-root",
+                    str(self.project_root),
+                ]
+                if allow_writes:
+                    worker_args.append("--allow-writes")
                 process = subprocess.Popen(
-                    [
-                        *command,
-                        "--model-key",
-                        self._model_key,
-                        "--agent-id",
-                        record.id,
-                        "--project-root",
-                        str(self.project_root),
-                    ],
+                    worker_args,
                     cwd=str(self.project_root),
                     stdout=log,
                     stderr=subprocess.STDOUT,
@@ -144,6 +163,36 @@ class SubagentManager:
         latest.error = error
         self.store.save(latest)
 
+    def cancel(self, agent_id: str) -> AgentRecord:
+        """中止一个正在运行的子 agent。"""
+        if not AGENT_ID_RE.fullmatch(agent_id or ""):
+            raise SubagentError("非法的子 agent id")
+        try:
+            record = self.store.load(agent_id)
+        except SubagentStoreError as exc:
+            raise SubagentError(str(exc)) from exc
+        if record.status != "running":
+            raise SubagentError("该子 agent 已经结束")
+
+        process = self._processes.get(agent_id)
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+        self._processes.pop(agent_id, None)
+
+        latest = self.store.load(agent_id)
+        latest.status = "cancelled"
+        latest.finished_at = now_iso()
+        latest.error = "已取消"
+        self.store.save(latest)
+        return latest
+
     def refresh(self) -> list[AgentRecord]:
         records = self.store.list_records()
         for record in records:
@@ -157,7 +206,7 @@ class SubagentManager:
                         f"进程异常退出（code={code}）" + (f"\n{tail}" if tail else ""),
                     )
             latest = self.store.load(record.id)
-            if latest.status in {"succeeded", "failed"}:
+            if latest.status in {"succeeded", "failed", "cancelled"}:
                 if process is not None and process.poll() is None:
                     try:
                         process.wait(timeout=2)

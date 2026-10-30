@@ -79,7 +79,7 @@ from session_store import (
 )
 
 from office_tools import OFFICE_TOOLS
-from approval import wrap_mcp_tools, wrap_tools
+from approval import WRITE_TOOL_NAMES, wrap_mcp_tools, wrap_tools
 from subagent_manager import SubagentManager
 
 # 始终加载脚本同目录下的 .env，避免从其他目录运行时找不到配置
@@ -750,14 +750,23 @@ def build_llm(model_key: str | None = None) -> ChatOpenAI:
     return build_chat_model(model_key or initial_model_key())
 
 
+def select_tools(read_only: bool = False) -> list[Any]:
+    """返回内置工具；read_only 时剔除所有写类工具（子 agent 默认只读）。"""
+    tools = list(TOOLS)
+    if read_only:
+        tools = [tool for tool in tools if getattr(tool, "name", "") not in WRITE_TOOL_NAMES]
+    return tools
+
+
 def build_graph(
     manager=None,
     include_subagent_tools: bool = True,
     model_key: str | None = None,
     extra_tools: list[Any] | None = None,
+    read_only: bool = False,
 ):
     """构建并编译 Agent 图：agent -> (tools -> agent)* -> END。"""
-    tools = list(TOOLS)
+    tools = select_tools(read_only)
     if include_subagent_tools and manager is not None:
         from subagent_tools import build_subagent_tools
 

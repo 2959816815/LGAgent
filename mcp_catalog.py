@@ -3,11 +3,13 @@
 Only stdio servers are supported.  Presets describe a *default* command and
 environment; users can override the values when adding a server.  Secrets stay
 in ``mcp_servers.json`` (or can be referenced as ``${ENV_NAME}``).
+
+预设按需构建（而不是在导入时固化），这样开发态与打包态的默认值（例如 SQLite
+数据库路径）能各自正确。
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -24,39 +26,47 @@ def _sqlite_command() -> list[str]:
 
 
 def _sqlite_default_db() -> str:
+    """打包后不给默认值：避免默认指向 App 自己的会话库，由用户显式选择。"""
     if getattr(sys, "frozen", False):
-        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-        return str(base / "langgraph-agent" / "agent.db")
+        return ""
     return "data/agent.db"
 
 
-CATALOG: list[dict] = [
-    {
+def _sqlite_preset() -> dict:
+    default = _sqlite_default_db()
+    return {
         "id": "sqlite",
         "name": "SQLite 数据库",
         "description": "只读查询本地 SQLite：列表、表结构、SELECT/PRAGMA。",
         "command": _sqlite_command(),
         "cwd": ".",
-        "env": {"MCP_SQLITE_DB": _sqlite_default_db()},
+        "env": {"MCP_SQLITE_DB": default},
         "fields": [
             {
                 "key": "MCP_SQLITE_DB",
                 "label": "数据库路径",
-                "default": _sqlite_default_db(),
+                "default": default,
                 "required": True,
                 "secret": False,
             }
         ],
         "permission": "ask",
         "docs_url": "",
-    },
-    {
+    }
+
+
+def _playwright_preset() -> dict:
+    # 用 npx 而不是仓库内的 node_modules 路径：打包后仓库结构并不存在。
+    # 也不覆盖 PLAYWRIGHT_BROWSERS_PATH / TEMP，让 Playwright 使用用户目录下的
+    # 默认位置，避免写入只读的安装目录。
+    return {
         "id": "playwright",
         "name": "浏览器（Playwright）",
         "description": "真实浏览器：打开网页、点击、截图、读取页面内容。",
         "command": [
-            "node",
-            "desktop/node_modules/@playwright/mcp/cli.js",
+            "npx",
+            "-y",
+            "@playwright/mcp@latest",
             "--browser",
             "chromium",
             "--headless",
@@ -64,17 +74,14 @@ CATALOG: list[dict] = [
             "--isolated",
         ],
         "cwd": ".",
-        "env": {
-            "PLAYWRIGHT_BROWSERS_PATH": str(_root() / ".playwright-cache"),
-            "PWTEST_SERVER_REGISTRY": str(_root() / ".playwright-state" / "b"),
-            "PWTEST_DAEMON_SESSION_DIR": str(_root() / ".playwright-state" / "daemon"),
-            "TEMP": str(_root() / ".playwright-temp"),
-            "TMP": str(_root() / ".playwright-temp"),
-        },
+        "env": {},
         "fields": [],
         "permission": "ask",
         "docs_url": "",
-    },
+    }
+
+
+_STATIC_PRESETS: list[dict] = [
     {
         "id": "fetch",
         "name": "Fetch 网页抓取",
@@ -151,21 +158,26 @@ CATALOG: list[dict] = [
 ]
 
 
+def _all_presets() -> list[dict]:
+    return [_sqlite_preset(), _playwright_preset(), *_STATIC_PRESETS]
+
+
+def _copy(item: dict) -> dict:
+    return {
+        **item,
+        "command": list(item["command"]),
+        "env": dict(item["env"]),
+        "fields": [dict(field) for field in item["fields"]],
+    }
+
+
 def catalog_items() -> list[dict]:
     """Return a JSON-safe copy of the catalog."""
-    return [
-        {
-            **item,
-            "command": list(item["command"]),
-            "env": dict(item["env"]),
-            "fields": [dict(field) for field in item["fields"]],
-        }
-        for item in CATALOG
-    ]
+    return [_copy(item) for item in _all_presets()]
 
 
 def get_preset(preset_id: str) -> dict:
-    for item in CATALOG:
+    for item in _all_presets():
         if item["id"] == preset_id:
             return item
     raise KeyError(preset_id)

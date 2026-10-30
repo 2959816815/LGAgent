@@ -69,6 +69,7 @@ class SubagentWorkerTests(unittest.TestCase):
         build.assert_called_once_with(
             include_subagent_tools=False,
             model_key="deepseek",
+            read_only=True,
         )
 
 

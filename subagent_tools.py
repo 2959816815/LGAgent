@@ -7,10 +7,13 @@ from subagent_manager import SubagentError, SubagentManager
 
 def build_subagent_tools(manager: SubagentManager) -> list:
     @tool
-    def spawn_agent(task: str) -> str:
-        """创建一个独立子 agent 执行给定任务。只在任务适合并行/委派时调用。"""
+    def spawn_agent(task: str, allow_writes: bool = False) -> str:
+        """创建一个独立子 agent 执行给定任务。
+
+        默认只能读文件；确实需要它写文件/改 Office 时才传 allow_writes=True。
+        """
         try:
-            record = manager.spawn(task)
+            record = manager.spawn(task, allow_writes=allow_writes)
         except SubagentError as exc:
             return f"[错误] {exc}"
         return f"[已创建] {record.id} | {record.task[:80]}"

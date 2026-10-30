@@ -66,8 +66,20 @@ export async function createSession(
   });
 }
 
-export async function getSession(id: string): Promise<SessionDetail> {
-  return request<SessionDetail>(`/api/sessions/${id}`);
+export interface SessionPageOptions {
+  limit?: number;
+  before?: number;
+}
+
+export async function getSession(
+  id: string,
+  options: SessionPageOptions = {},
+): Promise<SessionDetail> {
+  const params = new URLSearchParams();
+  if (typeof options.limit === "number") params.set("limit", String(options.limit));
+  if (typeof options.before === "number") params.set("before", String(options.before));
+  const query = params.toString();
+  return request<SessionDetail>(`/api/sessions/${id}${query ? `?${query}` : ""}`);
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -99,9 +111,14 @@ export async function listModels(): Promise<ModelInfo[]> {
   return data.models;
 }
 
-export async function listAgents(): Promise<AgentRecord[]> {
-  const data = await request<{ agents: AgentRecord[] }>("/api/agents");
+export async function listAgents(sessionId?: string): Promise<AgentRecord[]> {
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+  const data = await request<{ agents: AgentRecord[] }>(`/api/agents${query}`);
   return data.agents;
+}
+
+export async function cancelAgent(id: string): Promise<void> {
+  await request(`/api/agents/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 }
 
 export async function listFiles(path = "."): Promise<FileEntry[]> {
@@ -170,7 +187,7 @@ export async function restartMcpServer(id: string): Promise<void> {
 }
 
 export async function setMcpEnabled(id: string, enabled: boolean): Promise<void> {
-  await request(`/api/mcp/servers/${encodeURIComponent(id)}/enabled`, {
+  await request(`/api/mcp/servers/${encodeURIComponent(id)}/enable`, {
     method: "POST",
     body: JSON.stringify({ enabled }),
   });
@@ -181,16 +198,25 @@ export interface StreamEvent {
   data: Record<string, unknown>;
 }
 
+export interface StreamOptions {
+  mode?: "regenerate";
+  editIndex?: number;
+}
+
 export async function* streamMessage(
   sessionId: string,
   text: string,
   signal: AbortSignal,
   attachments: Attachment[] = [],
+  options: StreamOptions = {},
 ): AsyncGenerator<StreamEvent> {
+  const body: Record<string, unknown> = { text, attachments };
+  if (options.mode) body.mode = options.mode;
+  if (typeof options.editIndex === "number") body.edit_index = options.editIndex;
   const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/messages`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ text, attachments }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!response.ok) {

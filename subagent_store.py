@@ -12,7 +12,7 @@ from langchain_core.messages import BaseMessage, messages_from_dict, messages_to
 
 SCHEMA_VERSION = 1
 MAX_TASK_CHARS = 4000
-STATUSES = {"running", "succeeded", "failed"}
+STATUSES = {"running", "succeeded", "failed", "cancelled"}
 AGENT_ID_RE = re.compile(r"^agent-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$")
 
 
@@ -32,6 +32,7 @@ def new_agent_id() -> str:
 class AgentRecord:
     id: str
     task: str
+    session_id: str = ""
     status: str = "running"
     created_at: str = field(default_factory=now_iso)
     started_at: str | None = None
@@ -47,6 +48,7 @@ class AgentRecord:
             "schema_version": SCHEMA_VERSION,
             "id": self.id,
             "task": self.task,
+            "session_id": self.session_id,
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -80,6 +82,7 @@ class AgentRecord:
         return cls(
             id=agent_id,
             task=task,
+            session_id=str(raw.get("session_id") or ""),
             status=status,
             created_at=str(raw.get("created_at") or now_iso()),
             started_at=raw.get("started_at"),
@@ -103,7 +106,9 @@ class SubagentStore:
             raise SubagentStoreError(f"非法 agent id: {agent_id}")
         return self.root / f"{agent_id}.json"
 
-    def create(self, task: str, agent_id: str | None = None) -> AgentRecord:
+    def create(
+        self, task: str, agent_id: str | None = None, session_id: str = ""
+    ) -> AgentRecord:
         task = task.strip()
         if not task:
             raise SubagentStoreError("任务不能为空")
@@ -116,6 +121,7 @@ class SubagentStore:
         record = AgentRecord(
             id=agent_id,
             task=task,
+            session_id=session_id or "",
             log_path=f".agents/{agent_id}.log",
         )
         self.save(record)

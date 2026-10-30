@@ -36,12 +36,15 @@ export interface Message {
 
 export interface SessionDetail extends SessionMeta {
   messages: Message[];
+  has_more?: boolean;
+  next_before?: number | null;
 }
 
 export interface AgentRecord {
   id: string;
   task: string;
-  status: "running" | "succeeded" | "failed";
+  session_id?: string;
+  status: "running" | "succeeded" | "failed" | "cancelled";
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
@@ -91,7 +94,7 @@ export interface McpServerStatus {
   permission: "auto" | "ask" | "deny" | string;
   tool_count: number;
   tools?: string[];
-  error?: string | null;
+  last_error?: string | null;
   started_at?: string | null;
 }
 

@@ -19,6 +19,15 @@ from mcp.types import ToolAnnotations
 mcp = FastMCP("sqlite")
 _TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _READ_ONLY_PREFIXES = ("select", "with", "pragma", "explain")
+# 跳过开头的注释，避免 "-- 备注\nSELECT ..." 被误判成非只读语句。
+_LEADING_COMMENTS = re.compile(r"^(?:\s*--[^\n]*(?:\n|$)|\s*/\*.*?\*/)*", re.S)
+
+
+def _first_keyword(statement: str) -> str:
+    stripped = _LEADING_COMMENTS.sub("", statement).lstrip("( \t\r\n")
+    if not stripped:
+        return ""
+    return stripped.split(None, 1)[0].lower()
 
 
 def _db_path() -> Path:
@@ -96,9 +105,8 @@ def query(sql: str, max_rows: int = 50) -> str:
     statement = (sql or "").strip()
     if not statement:
         return "[错误] SQL 不能为空。"
-    if statement.rstrip(";").find(";") >= 0:
-        return "[错误] 一次只能执行一条语句。"
-    first = statement.lstrip("(").split(None, 1)[0].lower() if statement else ""
+    # 不再手工找分号：字符串字面量里的 ';' 是合法的，多语句交给 sqlite3 判定。
+    first = _first_keyword(statement)
     if first not in _READ_ONLY_PREFIXES:
         return "[错误] 只允许只读查询（SELECT/WITH/PRAGMA/EXPLAIN）。"
     try:
@@ -115,6 +123,10 @@ def query(sql: str, max_rows: int = 50) -> str:
         if not columns:
             return "（查询没有返回列）"
         return _format_rows(columns, shown, total)
+    except sqlite3.ProgrammingError as exc:
+        if "one statement" in str(exc).lower():
+            return "[错误] 一次只能执行一条语句。"
+        return f"[错误] 查询失败: {exc}"
     except Exception as exc:
         return f"[错误] 查询失败: {exc}"
 

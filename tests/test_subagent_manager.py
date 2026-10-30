@@ -7,8 +7,26 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from subagent_manager import SubagentError, SubagentManager
+from subagent_manager import SubagentError, SubagentManager, _pid_alive
 from subagent_store import SubagentStore, now_iso
+
+
+class PidProbeTests(unittest.TestCase):
+    def test_probe_does_not_terminate_running_process(self):
+        import subprocess
+        import sys
+
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            time.sleep(0.5)
+            self.assertIsNone(child.poll(), "子进程应仍在运行")
+            self.assertTrue(_pid_alive(child.pid))
+            time.sleep(0.3)
+            self.assertIsNone(child.poll(), "检查存活不应终止目标进程")
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
 
 
 class SubagentManagerTests(unittest.TestCase):
@@ -21,6 +39,26 @@ class SubagentManagerTests(unittest.TestCase):
     def tearDown(self):
         self.manager.shutdown()
         shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_spawn_records_session_id(self):
+        record = self.manager.spawn("归属会话的任务", session_id="s-42")
+        self.assertEqual(self.manager.store.load(record.id).session_id, "s-42")
+
+    def test_cancel_stops_running_agent(self):
+        record = self.manager.spawn("slow 任务")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and self.manager.store.load(record.id).pid is None:
+            time.sleep(0.05)
+
+        cancelled = self.manager.cancel(record.id)
+
+        self.assertEqual(cancelled.status, "cancelled")
+        time.sleep(0.3)
+        self.assertEqual(self.manager.store.load(record.id).status, "cancelled")
+
+    def test_cancel_unknown_agent_raises(self):
+        with self.assertRaises(SubagentError):
+            self.manager.cancel("agent-20260101-000000-abcd")
 
     def test_spawn_and_wait_success(self):
         record = self.manager.spawn("整理周报")
@@ -93,6 +131,15 @@ class SubagentManagerTests(unittest.TestCase):
         self.assertIn("重启", loaded.error or "")
         manager.shutdown()
 
+    def test_frozen_spawn_uses_embedded_worker(self):
+        with patch("subagent_manager.subprocess.Popen") as popen:
+            popen.return_value.pid = 1234
+            popen.return_value.poll.return_value = None
+            with patch.object(__import__("subagent_manager").sys, "frozen", True, create=True):
+                self.manager.spawn("打包模式")
+            command = popen.call_args.args[0]
+        self.assertIn("--subagent-worker", command)
+
     def test_spawn_passes_model_key(self):
         self.manager.set_model_key("qwen")
         with patch("subagent_manager.subprocess.Popen") as popen:
@@ -102,6 +149,17 @@ class SubagentManagerTests(unittest.TestCase):
             command = popen.call_args.args[0]
         self.assertIn("--model-key", command)
         self.assertEqual(command[command.index("--model-key") + 1], "qwen")
+
+    def test_spawn_passes_allow_writes_only_when_requested(self):
+        with patch("subagent_manager.subprocess.Popen") as popen:
+            popen.return_value.pid = 1234
+            popen.return_value.poll.return_value = None
+            self.manager.spawn("只读任务")
+            default_command = popen.call_args.args[0]
+            self.manager.spawn("写文件任务", allow_writes=True)
+            write_command = popen.call_args.args[0]
+        self.assertNotIn("--allow-writes", default_command)
+        self.assertIn("--allow-writes", write_command)
 
 
 if __name__ == "__main__":

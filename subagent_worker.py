@@ -36,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agent-id", required=True)
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--model-key", default=None)
+    # 子 agent 默认只能读；父 agent 需要显式开启写权限。
+    parser.add_argument("--allow-writes", action="store_true")
     args = parser.parse_args(argv)
 
     store = SubagentStore(Path(args.project_root) / ".agents")
@@ -48,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         graph = build_graph(
             include_subagent_tools=False,
             model_key=args.model_key,
+            read_only=not args.allow_writes,
         )
         result = graph.invoke(
             {

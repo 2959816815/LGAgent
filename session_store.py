@@ -131,6 +131,16 @@ def sanitize_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     return clean
 
 
+def message_text(message) -> str:
+    """把消息内容压成纯文本（多段内容只取文本部分）。"""
+    content = getattr(message, "content", "")
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part) for part in content
+        )
+    return str(content)
+
+
 class SessionStore:
     def __init__(self, root: Path, clock: Callable[[], datetime] | None = None):
         self.root = Path(root)
@@ -278,6 +288,40 @@ class SessionStore:
             )
         metas.sort(key=lambda meta: (meta.updated_at, meta.id), reverse=True)
         return metas
+
+    def search(self, query: str, limit: int = 20) -> list[dict]:
+        """扫描所有会话消息做子串搜索（JSON 后端没有全文索引）。"""
+        needle = (query or "").strip()
+        if not needle or limit <= 0:
+            return []
+        lowered = needle.casefold()
+        results: list[dict] = []
+        for meta in self.list_sessions():
+            try:
+                session = self.load(meta.id)
+            except SessionStoreError:
+                continue
+            for index, message in enumerate(session.messages):
+                text = message_text(message)
+                position = text.casefold().find(lowered)
+                if position < 0:
+                    continue
+                start = max(0, position - 32)
+                end = min(len(text), position + len(needle) + 64)
+                snippet = (
+                    ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+                )
+                results.append(
+                    {
+                        "session_id": meta.id,
+                        "message_index": index,
+                        "role": getattr(message, "type", "message"),
+                        "snippet": snippet,
+                    }
+                )
+                if len(results) >= limit:
+                    return results
+        return results
 
     def delete(self, session_id: str) -> None:
         path = self._session_path(session_id)
