@@ -97,6 +97,28 @@ class McpManagerTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(manager.list_servers()[0].status, "running")
 
+    def test_manager_refreshes_tools_on_list_changed(self) -> None:
+        self._config(
+            [
+                self._fake(
+                    "demo",
+                    True,
+                    command=[sys.executable, str(FAKE), "--tools-change"],
+                )
+            ]
+        )
+        manager = self._manager()
+        manager.start_enabled()
+        self.assertEqual(manager.list_servers()[0].tool_count, 3)
+
+        deadline = time.monotonic() + 8
+        count = 3
+        while time.monotonic() < deadline and count == 3:
+            time.sleep(0.2)
+            count = manager.list_servers()[0].tool_count
+
+        self.assertEqual(count, 4, "收到 tools/list_changed 后应自动更新工具列表")
+
     def test_enabled_ids_and_tool_specs(self) -> None:
         self._config([self._fake("demo", True), self._fake("off", False)])
         manager = self._manager()

@@ -71,6 +71,31 @@ class McpClientTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_tools_list_changed_marks_dirty_and_refreshes(self) -> None:
+        client = StdioMcpClient(
+            [sys.executable, str(FAKE), "--tools-change"],
+            cwd=ROOT,
+            startup_timeout=5.0,
+            tool_timeout=5.0,
+            server_name="fake",
+        )
+        try:
+            client.start()
+            self.assertNotIn("extra", {tool.name for tool in client.tools})
+
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not client.tools_dirty:
+                time.sleep(0.05)
+            self.assertTrue(
+                client.tools_dirty, "应收到 notifications/tools/list_changed"
+            )
+
+            client.refresh_tools()
+            self.assertIn("extra", {tool.name for tool in client.tools})
+            self.assertFalse(client.tools_dirty)
+        finally:
+            client.close()
+
     def test_crash_and_stderr(self) -> None:
         client = make_client()
         try:

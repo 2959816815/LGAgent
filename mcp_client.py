@@ -118,6 +118,10 @@ class StdioMcpClient:
         self._server_name = server_name
         self._proc: subprocess.Popen | None = None
         self._lines: _LineReader | None = None
+        self._pending: dict[str, queue.Queue] = {}
+        self._pending_lock = threading.Lock()
+        self._tools_dirty = threading.Event()
+        self._dispatcher: threading.Thread | None = None
         self._stderr: _StderrDrain | None = None
         self._next_id = 0
         self._lock = threading.Lock()
@@ -156,6 +160,10 @@ class StdioMcpClient:
         )
         self._lines = _LineReader(self._proc.stdout)
         self._stderr = _StderrDrain(self._proc.stderr)
+        self._dispatcher = threading.Thread(
+            target=self._dispatch, args=(self._lines,), daemon=True
+        )
+        self._dispatcher.start()
 
         self._request(
             "initialize",
@@ -234,6 +242,59 @@ class StdioMcpClient:
         return self._text_from_content(result)
 
     # ---------------------------------------------------------------- internals
+    @property
+    def tools_dirty(self) -> bool:
+        """服务端发过 notifications/tools/list_changed，等待重新拉取。"""
+        return self._tools_dirty.is_set()
+
+    def refresh_tools(self) -> list[McpToolSpec]:
+        """重新拉取工具列表，并清除变更标记。"""
+        self._tools = self._parse_tools(
+            self._request("tools/list", {}, timeout=self._startup_timeout)
+        )
+        self._tools_dirty.clear()
+        return self._tools
+
+    def _dispatch(self, lines: _LineReader) -> None:
+        """把响应按 id 分发给等待者，并处理服务端通知。"""
+        while True:
+            line = lines.get(1.0)
+            if line is queue.Empty:
+                proc = self._proc
+                if proc is None or proc.poll() is not None:
+                    self._fail_pending()
+                    return
+                continue
+            if line is None:
+                self._fail_pending()
+                return
+            text = line.decode("utf-8", errors="replace").strip()
+            if not text:
+                continue
+            try:
+                message = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(message, dict):
+                continue
+            if message.get("method") == "notifications/tools/list_changed":
+                self._tools_dirty.set()
+                continue
+            request_id = message.get("id")
+            if request_id is None:
+                continue
+            with self._pending_lock:
+                waiter = self._pending.pop(str(request_id), None)
+            if waiter is not None:
+                waiter.put(message)
+
+    def _fail_pending(self) -> None:
+        with self._pending_lock:
+            waiters = list(self._pending.values())
+            self._pending.clear()
+        for waiter in waiters:
+            waiter.put(None)
+
     def _request(self, method: str, params: dict[str, Any], timeout: float):
         with self._lock:
             proc = self._proc
@@ -241,6 +302,9 @@ class StdioMcpClient:
                 raise McpError("MCP 子进程已退出")
             self._next_id += 1
             request_id = f"r{self._next_id}"
+            waiter: queue.Queue = queue.Queue()
+            with self._pending_lock:
+                self._pending[request_id] = waiter
             payload = {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -252,42 +316,35 @@ class StdioMcpClient:
                 proc.stdin.write(data)
                 proc.stdin.flush()
             except (BrokenPipeError, OSError) as exc:
+                with self._pending_lock:
+                    self._pending.pop(request_id, None)
                 raise McpError(f"MCP 写入失败: {exc}") from exc
 
-            if self._lines is None:
-                raise McpError("MCP 输出流未初始化")
-
             deadline = time.monotonic() + max(0.0, timeout)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise McpTimeout(f"MCP 请求超时: {method}")
-                line = self._lines.get(remaining)
-                if line is queue.Empty:
-                    raise McpTimeout(f"MCP 请求超时: {method}")
-                if line is None:
-                    raise McpError("MCP 子进程已关闭输出")
-                text = line.decode("utf-8", errors="replace").strip()
-                if not text:
-                    continue
-                try:
-                    message = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(message, dict):
-                    continue
-                if message.get("id") != request_id:
-                    continue
-                error = message.get("error")
-                if error:
-                    if isinstance(error, dict):
-                        detail = error.get("message") or json.dumps(
-                            error, ensure_ascii=False
-                        )
-                    else:
-                        detail = str(error)
-                    raise McpError(str(detail))
-                return message.get("result")
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise McpTimeout(f"MCP 请求超时: {method}")
+                    try:
+                        message = waiter.get(timeout=remaining)
+                    except queue.Empty:
+                        raise McpTimeout(f"MCP 请求超时: {method}") from None
+                    if message is None:
+                        raise McpError("MCP 子进程已关闭输出")
+                    error = message.get("error")
+                    if error:
+                        if isinstance(error, dict):
+                            detail = error.get("message") or json.dumps(
+                                error, ensure_ascii=False
+                            )
+                        else:
+                            detail = str(error)
+                        raise McpError(str(detail))
+                    return message.get("result")
+            finally:
+                with self._pending_lock:
+                    self._pending.pop(request_id, None)
 
     def _notify(self, method: str) -> None:
         proc = self._proc

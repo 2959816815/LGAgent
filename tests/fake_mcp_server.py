@@ -52,9 +52,22 @@ def result(request_id, data: dict) -> None:
     send({"jsonrpc": "2.0", "id": request_id, "result": data})
 
 
+EXTRA_TOOL = {
+    "name": "extra",
+    "description": "工具列表变更后新增的工具",
+    "inputSchema": {"type": "object", "properties": {}},
+    "annotations": {"readOnlyHint": True},
+}
+
+
 def main() -> None:
     sys.stderr.write("fake stderr ready\n")
     sys.stderr.flush()
+
+    # --tools-change：第一次 tools/list 之后发一条 list_changed 通知，
+    # 之后的 tools/list 多返回一个 extra 工具。
+    tools_change = "--tools-change" in sys.argv
+    listed = 0
 
     for line in sys.stdin:
         text = line.strip()
@@ -79,7 +92,19 @@ def main() -> None:
         elif method == "notifications/initialized":
             continue
         elif method == "tools/list":
-            result(request_id, {"tools": TOOLS})
+            listed += 1
+            tools = list(TOOLS)
+            if tools_change and listed > 1:
+                tools.append(EXTRA_TOOL)
+            result(request_id, {"tools": tools})
+            if tools_change and listed == 1:
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/tools/list_changed",
+                        "params": {},
+                    }
+                )
         elif method == "tools/call":
             params = request.get("params") or {}
             name = params.get("name")

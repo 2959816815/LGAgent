@@ -70,6 +70,21 @@ class McpManager:
         self._state_lock = threading.Lock()
         self._raw = self._load_config()
         self._migrate_secrets()
+        self._watch_stop = threading.Event()
+        threading.Thread(
+            target=self._watch_tool_changes, daemon=True, name="mcp-tools-watch"
+        ).start()
+
+    def _watch_tool_changes(self) -> None:
+        """收到 tools/list_changed 后重新拉取工具列表（不阻塞 API 请求）。"""
+        while not self._watch_stop.wait(2.0):
+            for managed in list(self._processes.values()):
+                if not managed.client.tools_dirty:
+                    continue
+                try:
+                    managed.client.refresh_tools()
+                except Exception:  # noqa: BLE001
+                    pass
 
     # ---------------------------------------------------------------- config
     def _load_config(self) -> dict:
@@ -176,6 +191,7 @@ class McpManager:
                         self._set_failure(str(item["id"]), f"MCP 启动失败: {exc}")
 
     def stop_all(self) -> None:
+        self._watch_stop.set()
         for server_id in list(self._processes):
             self._stop(server_id)
 
