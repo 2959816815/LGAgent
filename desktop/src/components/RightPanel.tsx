@@ -103,14 +103,17 @@ function FileNode(props: {
   );
 }
 
-function FilePanel(props: { onInsert: (path: string) => void }) {
+export function FilePanel(props: { onInsert: (path: string) => void }) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<FileEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    setLoading(true);
+    setError("");
     void (async () => {
       try {
         setEntries(await listFiles("."));
@@ -120,7 +123,7 @@ function FilePanel(props: { onInsert: (path: string) => void }) {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [reloadKey]);
 
   useEffect(() => {
     const value = query.trim();
@@ -147,15 +150,25 @@ function FilePanel(props: { onInsert: (path: string) => void }) {
 
   return (
     <div className="file-panel">
-      <input
-        className="file-search"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="搜索工作区文件"
-      />
+      <div className="file-panel-head">
+        <input
+          className="file-search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索工作区文件"
+        />
+        <button
+          type="button"
+          className="file-refresh"
+          title="刷新文件树"
+          onClick={() => setReloadKey((value) => value + 1)}
+        >
+          刷新
+        </button>
+      </div>
       {error && <div className="file-error">{error}</div>}
       {loading && <div className="file-loading">加载文件树…</div>}
-      <div className="file-tree">
+      <div className="file-tree" key={reloadKey}>
         {results !== null
           ? results.map((entry) => (
               <button

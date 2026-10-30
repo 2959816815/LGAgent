@@ -1270,3 +1270,8 @@ button {
 .load-earlier { display: flex; justify-content: center; padding: 4px 0 12px; }
 .load-earlier button { padding: 4px 14px; font-size: 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); color: var(--muted); cursor: pointer; }
 .load-earlier button:hover { color: var(--text); border-color: var(--accent); }
+
+.file-panel-head { display: flex; align-items: center; gap: 8px; }
+.file-panel-head .file-search { flex: 1; }
+.file-refresh { padding: 4px 10px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--muted); cursor: pointer; }
+.file-refresh:hover { color: var(--text); border-color: var(--accent); }

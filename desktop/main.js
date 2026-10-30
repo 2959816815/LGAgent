@@ -393,21 +393,68 @@ async function testDeepSeek({ apiKey, baseUrl, model }) {
   return { ok: true };
 }
 
+function windowStatePath() {
+  return path.join(app.getPath("userData"), "window-state.json");
+}
+
+function loadWindowState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(windowStatePath(), "utf8"));
+    if (!raw || !Number.isFinite(raw.width) || !Number.isFinite(raw.height)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function isOnScreen(bounds) {
+  if (!Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)) return false;
+  return screen.getAllDisplays().some((display) => {
+    const area = display.workArea;
+    return (
+      bounds.x < area.x + area.width - 80 &&
+      bounds.x + bounds.width > area.x + 80 &&
+      bounds.y < area.y + area.height - 60 &&
+      bounds.y + bounds.height > area.y + 40
+    );
+  });
+}
+
+function saveWindowState(win) {
+  try {
+    const state = win.isMaximized()
+      ? { ...win.getNormalBounds(), maximized: true }
+      : { ...win.getBounds(), maximized: false };
+    fs.writeFileSync(windowStatePath(), JSON.stringify(state), "utf8");
+  } catch {
+    // 窗口状态只是便利功能，写失败不影响使用
+  }
+}
+
 async function createWindow() {
   if (!settingsStore.needsSetup()) {
     await startBackend();
   }
 
   const area = screen.getPrimaryDisplay().workArea;
-  const width = Math.min(960, area.width - 80);
-  const height = Math.min(820, area.height - 80);
-  const x = Math.round(area.x + (area.width - width) / 2);
-  const y = Math.round(area.y + (area.height - height) / 2);
+  const fallback = {
+    width: Math.min(960, area.width - 80),
+    height: Math.min(820, area.height - 80),
+    x: Math.round(area.x + (area.width - Math.min(960, area.width - 80)) / 2),
+    y: Math.round(area.y + (area.height - Math.min(820, area.height - 80)) / 2),
+  };
+  const saved = loadWindowState();
+  const bounds =
+    saved && isOnScreen(saved)
+      ? {
+          x: saved.x,
+          y: saved.y,
+          width: Math.max(880, Math.min(saved.width, area.width)),
+          height: Math.max(600, Math.min(saved.height, area.height)),
+        }
+      : fallback;
   mainWindow = new BrowserWindow({
-    width,
-    height,
-    x,
-    y,
+    ...bounds,
     minWidth: 880,
     minHeight: 600,
     autoHideMenuBar: true,
@@ -429,10 +476,23 @@ async function createWindow() {
       process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5173",
     );
   }
-  mainWindow.setBounds({ x, y, width, height });
+  if (saved && saved.maximized) mainWindow.maximize();
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+
+  const win = mainWindow;
+  let saveTimer = null;
+  const scheduleSave = () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveWindowState(win), 400);
+  };
+  win.on("resize", scheduleSave);
+  win.on("move", scheduleSave);
+  win.on("close", () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveWindowState(win);
+  });
 }
 
 ipcMain.handle("desktop:export-diagnostics", async () => {
