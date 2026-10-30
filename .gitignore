@@ -23,3 +23,37 @@ release/
 *.spec
 rebuild.log
 data/
+
+# 打包输出与本地构建残留
+release-final/
+release-portable/
+release-v3/
+release-v4/
+*.blockmap
+*.log
+!desktop/build/*.log
+*.png
+asar-test/
+.asar-*/
+.temp-installer/
+.dsh-diag/
+.mcp-check/
+.pyi-probe/
+.sidecar-tmp/
+.dev-data/
+.desktop-data-from-dist/
+.verify*/
+group.txt
+
+# 解包出来的 Electron 运行时（项目根下）
+/LangGraph Agent.exe
+/chrome_*.pak
+/*.dll
+/*.dat
+/*.bin
+/LICENSE.electron.txt
+/LICENSES.chromium.html
+/locales/
+/resources/
+/version
+

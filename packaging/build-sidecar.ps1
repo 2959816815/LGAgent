@@ -1,45 +1,10 @@
+# 构建 sidecar 的 PowerShell 入口。
+# 实际逻辑在 build-sidecar.mjs（与 pnpm dist:win 共用同一份配置），
+# 这里只做转发，避免两份参数各自漂移。
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-Set-Location $root
 
-$python = "D:\Anaconda3\envs\rag\python.exe"
-if (-not (Test-Path -LiteralPath $python)) {
-    throw "找不到打包用 Python: $python"
-}
-
-& $python -m PyInstaller `
-  --noconfirm --clean --onedir `
-  --name langgraph-sidecar `
-  --distpath "$root\dist-sidecar" `
-  --workpath "$root\build\sidecar" `
-  --specpath "$root\build" `
-  --collect-submodules uvicorn `
-  --collect-submodules langgraph `
-  --collect-submodules langchain_core `
-  --collect-submodules langchain_openai `
-  --collect-data certifi `
-  --exclude-module torch `
-  --exclude-module torchvision `
-  --exclude-module torchaudio `
-  --exclude-module tensorflow `
-  --exclude-module transformers `
-  --exclude-module sklearn `
-  --exclude-module scipy `
-  --exclude-module pandas `
-  --exclude-module matplotlib `
-  --exclude-module IPython `
-  --exclude-module notebook `
-  --exclude-module tkinter `
-  --exclude-module zmq `
-  --exclude-module onnxruntime `
-  desktop_api.py
-
+& node (Join-Path $root "packaging\build-sidecar.mjs")
 if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller 失败，退出码 $LASTEXITCODE"
+    throw "sidecar 构建失败，退出码 $LASTEXITCODE"
 }
-
-$exe = Join-Path $root "dist-sidecar\langgraph-sidecar\langgraph-sidecar.exe"
-if (-not (Test-Path -LiteralPath $exe)) {
-    throw "未生成 sidecar: $exe"
-}
-Write-Output "SIDECAR_OK $exe"

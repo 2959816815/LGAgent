@@ -8,8 +8,9 @@
   "scripts": {
     "dev": "concurrently -k \"vite --port 5173\" \"wait-on http://localhost:5173 && node launch-electron.cjs\"",
     "build": "vite build",
-    "test": "vitest run",
-    "dist:win": "pnpm build && electron-builder --win nsis --config electron-builder.yml"
+    "test": "vitest run && node --test settings.test.cjs",
+    "dist:win": "pnpm build && node ../packaging/build-sidecar.mjs && electron-builder --win nsis --config electron-builder.yml",
+    "dist:win:fast": "pnpm build && electron-builder --win nsis --config electron-builder.yml"
   },
   "dependencies": {
     "react": "^18.3.1",
