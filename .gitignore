@@ -57,3 +57,17 @@ group.txt
 /resources/
 /version
 
+
+# 一次性调试产物
+resources.pak
+vk_swiftshader_icd.json
+install-task*.xml
+dsh-diag-*.mjs
+.asar-check-main.js
+tempCodeRunnerFile.py
+tmp_mcp_check.py
+/packaging/sfx-payload/
+/packaging/*.7z
+/packaging/v2/
+/packaging/v3-cmd/
+/packaging/v4-single/
