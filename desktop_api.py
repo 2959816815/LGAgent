@@ -11,9 +11,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from graph_agent import SYSTEM_PROMPT, build_graph, build_llm
@@ -31,6 +31,7 @@ from model_registry import (
 from session_store import SessionStore, SessionStoreError
 from session_store_sqlite import SqliteSessionStore
 from subagent_manager import SubagentError, SubagentManager
+from attachments import AttachmentError, AttachmentStore
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_TOKEN = os.getenv("DSH_DESKTOP_TOKEN", "")
@@ -45,7 +46,7 @@ def _text(content: Any) -> str:
     return str(content)
 
 
-def _image_parts(text: str, attachments: Any) -> str | list[dict]:
+def _image_parts(text: str, attachments: Any, store: AttachmentStore) -> str | list[dict]:
     if not attachments:
         return text
     if not isinstance(attachments, list) or len(attachments) > 4:
@@ -57,13 +58,74 @@ def _image_parts(text: str, attachments: Any) -> str | list[dict]:
         data_url = str((item or {}).get("data_url", ""))
         if not data_url.startswith("data:image/"):
             raise HTTPException(400, "图片格式无效")
-        if len(data_url) > 8_000_000:
-            raise HTTPException(400, "图片太大，请压缩到约 6MB 以内")
-        parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        try:
+            ref = store.save_data_url(data_url, name=str((item or {}).get("name") or ""))
+        except AttachmentError as exc:
+            raise HTTPException(400, f"图片保存失败: {exc}") from exc
+        parts.append(ref)
     return parts
 
 
-def _message_json(message: Any) -> dict:
+def _replace_content(message: Any, parts: list) -> Any:
+    """返回一个内容被替换的消息副本（兼容 pydantic v1/v2）。"""
+    if hasattr(message, "model_copy"):
+        return message.model_copy(update={"content": parts})
+    return message.copy(update={"content": parts})
+
+
+def hydrate_messages(messages: list, store: AttachmentStore) -> list:
+    """把 image_ref 还原成 data URL，供模型调用使用。"""
+    hydrated: list = []
+    for message in messages:
+        content = getattr(message, "content", "")
+        if not isinstance(content, list):
+            hydrated.append(message)
+            continue
+        parts: list = []
+        changed = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_ref":
+                attachment_id = str(part.get("attachment_id") or "")
+                try:
+                    url = store.data_url(attachment_id)
+                except AttachmentError:
+                    # 文件丢失时跳过这张图，不影响文字对话
+                    changed = True
+                    continue
+                parts.append({"type": "image_url", "image_url": {"url": url}})
+                changed = True
+            else:
+                parts.append(part)
+        hydrated.append(_replace_content(message, parts) if changed else message)
+    return hydrated
+
+
+def dehydrate_messages(messages: list, store: AttachmentStore) -> list:
+    """把 data URL 图片写盘并替换成 image_ref，避免 base64 落库。"""
+    dehydrated: list = []
+    for message in messages:
+        content = getattr(message, "content", "")
+        if not isinstance(content, list):
+            dehydrated.append(message)
+            continue
+        parts: list = []
+        changed = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                url = (part.get("image_url") or {}).get("url") if isinstance(part.get("image_url"), dict) else None
+                if isinstance(url, str) and url.startswith("data:"):
+                    try:
+                        parts.append(store.save_data_url(url, name=str(part.get("name") or "")))
+                        changed = True
+                        continue
+                    except AttachmentError:
+                        pass
+            parts.append(part)
+        dehydrated.append(_replace_content(message, parts) if changed else message)
+    return dehydrated
+
+
+def _message_json(message: Any, attachment_url=None) -> dict:
     role = {
         "human": "user",
         "ai": "assistant",
@@ -72,14 +134,30 @@ def _message_json(message: Any) -> dict:
     }.get(getattr(message, "type", ""), getattr(message, "type", "unknown"))
     data = {"role": role, "content": _text(message.content)}
     if isinstance(message.content, list):
-        data["attachments"] = [
-            {"type": "image", "data_url": part["image_url"]["url"]}
-            for part in message.content
-            if isinstance(part, dict)
-            and part.get("type") == "image_url"
-            and isinstance(part.get("image_url"), dict)
-            and part["image_url"].get("url")
-        ]
+        attachments: list[dict] = []
+        for part in message.content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "image_url" and isinstance(part.get("image_url"), dict):
+                url = part["image_url"].get("url")
+                if url:
+                    attachments.append({"type": "image", "data_url": url})
+            elif part.get("type") == "image_ref" and part.get("attachment_id"):
+                attachment_id = str(part["attachment_id"])
+                link = (
+                    attachment_url(attachment_id)
+                    if attachment_url
+                    else f"/api/attachments/{attachment_id}"
+                )
+                attachments.append(
+                    {
+                        "type": "image",
+                        "data_url": link,
+                        "name": part.get("name") or "",
+                    }
+                )
+        if attachments:
+            data["attachments"] = attachments
     if isinstance(message, AIMessage):
         data["tool_calls"] = [
             {"id": call.get("id"), "name": call.get("name"), "args": call.get("args", {})}
@@ -144,7 +222,7 @@ def _image_part_count(message) -> int:
     return sum(
         1
         for part in content
-        if isinstance(part, dict) and part.get("type") == "image_url"
+        if isinstance(part, dict) and part.get("type") in {"image_url", "image_ref"}
     )
 
 
@@ -224,6 +302,7 @@ def create_app(
 ) -> FastAPI:
     data_dir = Path(data_root or os.getenv("DSH_DATA_DIR") or root)
     store = _create_session_store(data_dir)
+    attachment_store = AttachmentStore(data_dir)
     manager = SubagentManager(
         project_root=data_dir,
         worker_path=Path(__file__).resolve().parent / "subagent_worker.py",
@@ -303,7 +382,8 @@ def create_app(
                 messages.append(
                     SystemMessage(content=f"{SUMMARY_PREFIX}\n{session.summary}")
                 )
-            messages.extend(session.messages)
+            # 发给模型前把附件引用还原成 data URL（视觉接口只认这个）
+            messages.extend(hydrate_messages(session.messages, attachment_store))
             final_messages = messages
             for mode, payload in graph.stream(
                 {"messages": messages},
@@ -341,9 +421,11 @@ def create_app(
                                 emit_tool_end(message)
                 elif mode == "values":
                     final_messages = payload["messages"]
-            session.messages = [
-                m for m in final_messages if not isinstance(m, SystemMessage)
-            ]
+            # 落库前把 data URL 转回引用，避免 base64 进入会话存储
+            session.messages = dehydrate_messages(
+                [m for m in final_messages if not isinstance(m, SystemMessage)],
+                attachment_store,
+            )
             store.save(session)
         except Exception as exc:
             emit(run, "error", {"run_id": run.run_id, "code": "run_error", "message": str(exc)})
@@ -435,7 +517,7 @@ def create_app(
                     return {"results": results}
         return {"results": results}
 
-    def session_json(session) -> dict:
+    def session_json(session, attachment_url=None) -> dict:
         return {
             "id": session.id,
             "title": session.title,
@@ -445,8 +527,16 @@ def create_app(
             "message_count": len(session.messages),
             "summary": session.summary,
             "summary_count": session.summary_count,
-            "messages": [_message_json(m) for m in session.messages],
+            "messages": [
+                _message_json(m, attachment_url) for m in session.messages
+            ],
         }
+
+    def attachment_link(request: Request):
+        """为 <img> 提供可直接访问的绝对地址（带 token 查询参数）。"""
+        base = str(request.base_url).rstrip("/")
+        suffix = f"?token={token}" if token else ""
+        return lambda attachment_id: f"{base}/api/attachments/{attachment_id}{suffix}"
 
     @app.get("/api/sessions", dependencies=[Depends(require_token)])
     def list_sessions() -> dict:
@@ -465,7 +555,7 @@ def create_app(
         }
 
     @app.post("/api/sessions", dependencies=[Depends(require_token)])
-    def create_session(payload: dict | None = None) -> dict:
+    def create_session(request: Request, payload: dict | None = None) -> dict:
         payload = payload or {}
         title = str(payload.get("title") or "新会话")
         model_key = payload.get("model_key") or initial_model_key()
@@ -474,7 +564,7 @@ def create_app(
         except (SessionStoreError, ModelConfigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         store.set_active_id(session.id)
-        return session_json(session)
+        return session_json(session, attachment_link(request))
 
     @app.get("/api/sessions/search", dependencies=[Depends(require_token)])
     def search_sessions(q: str = "") -> dict:
@@ -514,13 +604,16 @@ def create_app(
 
     @app.get("/api/sessions/{session_id}", dependencies=[Depends(require_token)])
     def get_session(
-        session_id: str, limit: int | None = None, before: int | None = None
+        request: Request,
+        session_id: str,
+        limit: int | None = None,
+        before: int | None = None,
     ) -> dict:
         try:
             session = store.load(session_id)
         except SessionStoreError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        payload = session_json(session)
+        payload = session_json(session, attachment_link(request))
         if limit is None:
             return payload
         # 分页：返回 before 之前（不含）最近的 limit 条；before 缺省表示取最新一页。
@@ -626,11 +719,11 @@ def create_app(
                     raise HTTPException(status_code=400, detail="只能编辑用户消息")
                 if not text and not attachments:
                     raise HTTPException(status_code=400, detail="消息不能为空")
-                content = _image_parts(text, attachments)
+                content = _image_parts(text, attachments, attachment_store)
                 del session.messages[edit_index + 1 :]
                 session.messages[edit_index] = HumanMessage(content=content)
             else:
-                content = _image_parts(text, attachments)
+                content = _image_parts(text, attachments, attachment_store)
                 session.messages.append(HumanMessage(content=content))
                 if session.title == "新会话":
                     session.title = (text or "图片对话")[:30]
@@ -662,7 +755,7 @@ def create_app(
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.post("/api/sessions/{session_id}/compact", dependencies=[Depends(require_token)])
-    def compact_now(session_id: str) -> dict:
+    def compact_now(request: Request, session_id: str) -> dict:
         with runs_lock:
             if session_id in active_runs:
                 raise HTTPException(status_code=409, detail="已有回复正在生成")
@@ -682,7 +775,26 @@ def create_app(
             ):
                 raise HTTPException(status_code=502, detail="压缩失败：未能生成摘要")
             store.save(session)
-            return session_json(session)
+            return session_json(session, attachment_link(request))
+
+    @app.get("/api/attachments/{attachment_id}")
+    def get_attachment(
+        attachment_id: str,
+        token_param: str = Query("", alias="token"),
+        x_desktop_token: str = Header(default=""),
+    ) -> Response:
+        # <img> 标签带不了自定义请求头，所以额外接受 ?token= 查询参数。
+        if token and token_param != token and x_desktop_token != token:
+            raise HTTPException(status_code=401, detail="缺少或无效的桌面 token")
+        try:
+            raw, mime = attachment_store.read(attachment_id)
+        except AttachmentError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=raw,
+            media_type=mime,
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
 
     @app.post("/api/runs/{run_id}/cancel", dependencies=[Depends(require_token)])
     def cancel_run(run_id: str):
