@@ -283,6 +283,8 @@ function startBackend() {
         DEEPSEEK_API_KEY: saved?.apiKey || "",
         DEEPSEEK_BASE_URL: saved?.baseUrl || DEFAULTS.baseUrl,
         DEEPSEEK_MODEL: saved?.model || DEFAULTS.model,
+        // 用户在设置页配置的完整模型列表（含解密后的 Key），由 sidecar 解析
+        DSH_MODELS_JSON: JSON.stringify(settingsStore.getModelsForSidecar()),
         TEMP: sidecarTemp,
         TMP: sidecarTemp,
         TMPDIR: sidecarTemp,
@@ -568,6 +570,38 @@ ipcMain.handle("desktop:save-deepseek", async (_event, payload) => {
   }
   settingsStore.saveDeepSeek(payload || {});
   return restartBackend();
+});
+
+ipcMain.handle("desktop:get-models", () => settingsStore.getModels());
+
+ipcMain.handle("desktop:save-models", async (_event, models) => {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("当前系统不支持安全存储，无法保存 API Key");
+  }
+  settingsStore.saveModels(models || []);
+  return restartBackend();
+});
+
+ipcMain.handle("desktop:test-model", async (_event, payload) => {
+  const kind = payload?.kind === "local" ? "local" : "api";
+  if (kind === "local") {
+    const base = String(payload?.baseUrl || "").trim().replace(/\/+$/, "");
+    if (!base) throw new Error("本地服务地址不能为空");
+    const response = await fetch(`${base}/models`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) {
+      throw new Error(`本地服务返回 ${response.status}`);
+    }
+    return { ok: true };
+  }
+  const apiKey = String(payload?.apiKey || "").trim();
+  if (!apiKey) throw new Error("API Key 不能为空");
+  return testDeepSeek({
+    apiKey,
+    baseUrl: payload?.baseUrl,
+    model: payload?.model,
+  });
 });
 
 async function createWindowWithRetry() {

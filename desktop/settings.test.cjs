@@ -21,6 +21,14 @@ test("needs setup when no settings file", () => {
   assert.equal(tempStore().needsSetup(), true);
 });
 
+test("fresh store ships a local Ollama model", () => {
+  const models = tempStore().getModels();
+  const local = models.find((item) => item.id === "local");
+  assert.ok(local);
+  assert.equal(local.kind, "local");
+  assert.match(local.base_url, /11434/);
+});
+
 test("saves and reads DeepSeek settings without plaintext key", () => {
   const store = tempStore();
   store.saveDeepSeek({ apiKey: "sk-test", baseUrl: DEFAULTS.baseUrl, model: DEFAULTS.model });
@@ -29,28 +37,82 @@ test("saves and reads DeepSeek settings without plaintext key", () => {
   assert.equal(fs.readFileSync(store.filePath, "utf8").includes("sk-test"), false);
 });
 
-test("updates base url and model without replacing the saved key", () => {
+test("getModels never exposes the key", () => {
   const store = tempStore();
-  store.saveDeepSeek({ apiKey: "sk-old", baseUrl: DEFAULTS.baseUrl, model: DEFAULTS.model });
-
-  store.saveSettings({ apiKey: "", baseUrl: "https://example.com", model: "deepseek-v4-pro" });
-
-  const saved = store.getDeepSeek();
-  assert.equal(saved.apiKey, "sk-old");
-  assert.equal(saved.baseUrl, "https://example.com");
-  assert.equal(saved.model, "deepseek-v4-pro");
+  store.saveDeepSeek({ apiKey: "sk-secret" });
+  const models = store.getModels();
+  const deepseek = models.find((item) => item.id === "deepseek");
+  assert.equal(deepseek.hasKey, true);
+  assert.equal(JSON.stringify(models).includes("sk-secret"), false);
 });
 
-test("saveSettings replaces the key when one is provided", () => {
+test("saveModels keeps the existing key when api_key is omitted", () => {
   const store = tempStore();
   store.saveDeepSeek({ apiKey: "sk-old" });
-
-  store.saveSettings({ apiKey: "sk-new", baseUrl: DEFAULTS.baseUrl, model: DEFAULTS.model });
-
-  assert.equal(store.getDeepSeek().apiKey, "sk-new");
+  const models = store.getModels();
+  const deepseek = models.find((item) => item.id === "deepseek");
+  models.push({
+    id: "myapi",
+    kind: "api",
+    label: "我的 API",
+    base_url: "https://example.com/v1",
+    model: "foo-1",
+    api_key: "",
+  });
+  store.saveModels(models);
+  const sidecar = store.getModelsForSidecar();
+  assert.equal(sidecar.find((item) => item.id === "deepseek").api_key, "sk-old");
+  assert.equal(sidecar.find((item) => item.id === "myapi").api_key, "");
 });
 
-test("rejects empty api key", () => {
+test("saveModels stores a new key encrypted", () => {
   const store = tempStore();
-  assert.throws(() => store.saveDeepSeek({ apiKey: "  " }), /API Key/);
+  const models = store.getModels();
+  models.push({
+    id: "myapi",
+    kind: "api",
+    label: "我的 API",
+    base_url: "https://example.com/v1",
+    model: "foo-1",
+    api_key: "sk-new",
+  });
+  store.saveModels(models);
+  assert.equal(store.getModelsForSidecar().find((item) => item.id === "myapi").api_key, "sk-new");
+  assert.equal(fs.readFileSync(store.filePath, "utf8").includes("sk-new"), false);
+});
+
+test("saveModels rejects invalid entries", () => {
+  const store = tempStore();
+  assert.throws(
+    () => store.saveModels([{ id: "BAD ID", kind: "api", base_url: "https://x", model: "m", label: "x" }]),
+    /id/,
+  );
+  assert.throws(
+    () => store.saveModels([{ id: "ok", kind: "api", base_url: "ftp://x", model: "m", label: "x" }]),
+    /地址/,
+  );
+});
+
+test("migrates the legacy deepseek block", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lg-settings-"));
+  const file = path.join(dir, "settings.json");
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      deepseek: {
+        base_url: "https://api.deepseek.com",
+        model: "deepseek-flash",
+        key_encrypted: Buffer.from("sk-legacy", "utf8").toString("base64"),
+      },
+    }),
+  );
+  const store = createSettingsStore({
+    filePath: file,
+    encrypt: (value) => Buffer.from(value, "utf8").toString("base64"),
+    decrypt: (value) => Buffer.from(value, "base64").toString("utf8"),
+  });
+  const deepseek = store.getModels().find((item) => item.id === "deepseek");
+  assert.equal(deepseek.hasKey, true);
+  assert.equal(store.getDeepSeek().apiKey, "sk-legacy");
 });

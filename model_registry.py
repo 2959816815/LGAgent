@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -59,8 +60,72 @@ def _env(name: str, default: str) -> str:
     return os.getenv(name, default).strip()
 
 
+def _dynamic_profiles() -> list[ModelProfile] | None:
+    """解析桌面端传来的 DSH_MODELS_JSON（用户在设置页配置的模型）。
+
+    解析失败或没有有效条目时返回 None，调用方回退到内置三模型。
+    """
+    raw = os.getenv("DSH_MODELS_JSON", "").strip()
+    if not raw:
+        return None
+    try:
+        items = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(items, list) or not items:
+        return None
+
+    profiles: list[ModelProfile] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("id") or "").strip()
+        model = str(item.get("model") or "").strip()
+        base_url = str(item.get("base_url") or "").strip()
+        if not key or not model or not base_url:
+            continue
+        kind = str(item.get("kind") or "api").strip().lower()
+        label = str(item.get("label") or key).strip()
+        if kind == "local":
+            profiles.append(
+                ModelProfile(
+                    key=key,
+                    label=label,
+                    provider="ollama",
+                    model=model,
+                    base_url=base_url,
+                    api_key="ollama",
+                    key_env=None,
+                    timeout=float(_env("OLLAMA_TIMEOUT", "300")),
+                    max_retries=0,
+                    supports_vision=False,
+                    context_window=int(_env("OLLAMA_CONTEXT_WINDOW", "4096")),
+                )
+            )
+        else:
+            profiles.append(
+                ModelProfile(
+                    key=key,
+                    label=label,
+                    provider="custom",
+                    model=model,
+                    base_url=base_url,
+                    api_key=str(item.get("api_key") or ""),
+                    key_env=None,
+                    timeout=float(item.get("timeout") or 60),
+                    max_retries=0,
+                    supports_vision=bool(item.get("supports_vision")),
+                    context_window=int(item.get("context_window") or 64_000),
+                )
+            )
+    return profiles or None
+
+
 def list_profiles() -> list[ModelProfile]:
     """每次读取环境变量，便于测试和运行时切换后读取最新 .env。"""
+    dynamic = _dynamic_profiles()
+    if dynamic is not None:
+        return dynamic
     return [
         ModelProfile(
             key="local",
@@ -115,9 +180,11 @@ def resolve_selector(selector: str) -> str:
     try:
         return _ALIASES[raw]
     except KeyError:
-        raise ModelConfigError(
-            f"未知模型: {selector}；输入 /model 查看可用模型。"
-        ) from None
+        pass
+    # 用户自定义模型的 id 直接可用
+    if any(profile.key == raw for profile in list_profiles()):
+        return raw
+    raise ModelConfigError(f"未知模型: {selector}；输入 /model 查看可用模型。")
 
 
 def get_profile(key: str) -> ModelProfile:
@@ -130,7 +197,11 @@ def get_profile(key: str) -> ModelProfile:
 
 def initial_model_key() -> str:
     raw = os.getenv("LLM_PROVIDER", "").strip().lower()
-    return _PROVIDER_KEYS.get(raw, DEFAULT_MODEL_KEY)
+    candidate = _PROVIDER_KEYS.get(raw, DEFAULT_MODEL_KEY)
+    keys = [profile.key for profile in list_profiles()]
+    if candidate in keys:
+        return candidate
+    return keys[0] if keys else DEFAULT_MODEL_KEY
 
 
 def build_chat_model(key: str) -> ChatOpenAI:

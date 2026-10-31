@@ -8,6 +8,8 @@ import sys
 import threading
 import time
 import uuid
+
+import httpx
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +180,28 @@ def _create_session_store(data_dir: Path):
             legacy_dir=data_dir / ".sessions",
         )
     return SessionStore(data_dir / ".sessions")
+
+
+_LOCAL_PROBE_TTL = 10.0
+_local_probe_cache: dict[str, tuple[float, bool, str]] = {}
+
+
+def _probe_local(base_url: str) -> tuple[bool, str]:
+    """探测本地 OpenAI 兼容服务（Ollama）是否可达，结果缓存 10 秒。"""
+    now = time.monotonic()
+    cached = _local_probe_cache.get(base_url)
+    if cached is not None and now - cached[0] < _LOCAL_PROBE_TTL:
+        return cached[1], cached[2]
+    url = base_url.rstrip("/") + "/models"
+    try:
+        response = httpx.get(url, timeout=2.5)
+        ok = response.status_code == 200
+        reason = "" if ok else f"本地模型服务返回 {response.status_code}"
+    except Exception:  # noqa: BLE001
+        ok = False
+        reason = "Ollama 未启动或地址不可达"
+    _local_probe_cache[base_url] = (now, ok, reason)
+    return ok, reason
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -898,7 +922,11 @@ def create_app(
     def models() -> dict:
         items = []
         for profile in list_profiles():
-            available = profile.key == "local" or bool(profile.api_key)
+            if profile.provider == "ollama":
+                available, reason = _probe_local(profile.base_url)
+            else:
+                available = bool(profile.api_key)
+                reason = "" if available else "未配置 API Key"
             item = {
                 "key": profile.key,
                 "label": profile.label,
@@ -908,7 +936,7 @@ def create_app(
                 "context_window": profile.context_window,
             }
             if not available:
-                item["reason"] = f"未配置 {profile.key_env}"
+                item["reason"] = reason or f"未配置 {profile.key_env}"
             items.append(item)
         return {"models": items}
 
