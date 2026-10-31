@@ -7,6 +7,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from mcp_client import McpError, McpToolSpec
 from mcp_manager import McpManager, McpManagerError
@@ -96,6 +97,23 @@ class McpManagerTests(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.assertEqual(manager.list_servers()[0].status, "running")
+
+    def test_stale_sidecar_command_is_rewritten(self) -> None:
+        self._config(
+            [
+                self._fake(
+                    "sqlite",
+                    True,
+                    command=[r"C:\旧安装目录\langgraph-sidecar.exe", "--mcp-sqlite"],
+                )
+            ]
+        )
+        with patch.object(sys, "frozen", True, create=True):
+            manager = self._manager()
+
+        command = manager._servers()[0]["command"]
+        self.assertEqual(command[0], sys.executable)
+        self.assertEqual(command[1], "--mcp-sqlite")
 
     def test_manager_refreshes_tools_on_list_changed(self) -> None:
         self._config(

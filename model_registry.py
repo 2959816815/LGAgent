@@ -177,13 +177,13 @@ def resolve_selector(selector: str) -> str:
     raw = selector.strip().lower()
     if not raw:
         raise ModelConfigError("未知模型: 空；输入 /model 查看可用模型。")
+    # 已配置模型的 id 优先：用户可能拿 "qwen3-vl-plus" 这类内置别名当 id
+    if any(profile.key == raw for profile in list_profiles()):
+        return raw
     try:
         return _ALIASES[raw]
     except KeyError:
         pass
-    # 用户自定义模型的 id 直接可用
-    if any(profile.key == raw for profile in list_profiles()):
-        return raw
     raise ModelConfigError(f"未知模型: {selector}；输入 /model 查看可用模型。")
 
 

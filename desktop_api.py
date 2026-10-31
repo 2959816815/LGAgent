@@ -377,7 +377,8 @@ def create_app(
                 },
             )
         try:
-            key = session.model_key or initial_model_key()
+            key = effective_model_key(session)
+            session.model_key = key
             manager.set_model_key(key)
             manager.set_current_session(session.id)
             try:
@@ -541,13 +542,20 @@ def create_app(
                     return {"results": results}
         return {"results": results}
 
+    def effective_model_key(session) -> str:
+        """会话记录的模型可能已被删除，回退到当前可用的默认模型。"""
+        keys = {profile.key for profile in list_profiles()}
+        if session.model_key in keys:
+            return session.model_key
+        return initial_model_key()
+
     def session_json(session, attachment_url=None) -> dict:
         return {
             "id": session.id,
             "title": session.title,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
-            "model_key": session.model_key or initial_model_key(),
+            "model_key": effective_model_key(session),
             "message_count": len(session.messages),
             "summary": session.summary,
             "summary_count": session.summary_count,
@@ -709,7 +717,9 @@ def create_app(
                 session = store.load(session_id)
             except SessionStoreError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            key = session.model_key or initial_model_key()
+            key = effective_model_key(session)
+            if session.model_key != key:
+                session.model_key = key
             try:
                 profile = get_profile(key)
             except ModelConfigError as exc:
@@ -789,7 +799,7 @@ def create_app(
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             if len(session.messages) <= COMPACT_KEEP_RECENT + 1:
                 raise HTTPException(status_code=400, detail="消息太少，暂时不需要压缩")
-            key = session.model_key or initial_model_key()
+            key = effective_model_key(session)
             try:
                 profile = get_profile(key)
             except ModelConfigError as exc:

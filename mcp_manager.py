@@ -70,6 +70,7 @@ class McpManager:
         self._state_lock = threading.Lock()
         self._raw = self._load_config()
         self._migrate_secrets()
+        self._heal_sidecar_commands()
         self._watch_stop = threading.Event()
         threading.Thread(
             target=self._watch_tool_changes, daemon=True, name="mcp-tools-watch"
@@ -160,6 +161,25 @@ class McpManager:
             encoding="utf-8",
         )
         os.replace(tmp, self.config_path)
+
+    def _heal_sidecar_commands(self) -> None:
+        """安装目录变化后，把指向旧 sidecar 路径的命令改回当前可执行文件。"""
+        if not getattr(sys, "frozen", False):
+            return
+        changed = False
+        for item in self._servers():
+            command = item.get("command")
+            if not isinstance(command, list) or not command:
+                continue
+            first = str(command[0] or "")
+            if "langgraph-sidecar" not in os.path.basename(first).lower():
+                continue
+            if first and os.path.exists(first):
+                continue
+            command[0] = sys.executable
+            changed = True
+        if changed:
+            self._save_config()
 
     def _migrate_secrets(self) -> None:
         """把历史配置里的明文密钥就地加密（每个配置只需迁移一次）。"""

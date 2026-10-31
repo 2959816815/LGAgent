@@ -52,6 +52,23 @@ class DynamicProfileTests(unittest.TestCase):
             self.assertEqual(resolve_selector("mylocal"), "mylocal")
             self.assertEqual(get_profile("myapi").model, "foo-1")
 
+    def test_custom_id_shadows_builtin_alias(self):
+        payload = json.dumps(
+            [
+                {
+                    "id": "qwen3-vl-plus",
+                    "kind": "api",
+                    "label": "千问 VL",
+                    "base_url": "https://example.com/v1",
+                    "model": "qwen3-vl-plus",
+                    "api_key": "sk-test",
+                }
+            ]
+        )
+        with patch.dict(os.environ, {"DSH_MODELS_JSON": payload}):
+            self.assertEqual(resolve_selector("qwen3-vl-plus"), "qwen3-vl-plus")
+            self.assertEqual(get_profile("qwen3-vl-plus").model, "qwen3-vl-plus")
+
     def test_invalid_json_falls_back_to_builtin_profiles(self):
         with patch.dict(os.environ, {"DSH_MODELS_JSON": "not-json"}):
             keys = [p.key for p in list_profiles()]
