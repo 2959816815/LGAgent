@@ -508,6 +508,7 @@ export function App() {
         onEditMessage={(index, text) => void editAndResend(index, text)}
         hasEarlier={earlier.hasMore}
         onLoadEarlier={() => void loadEarlier()}
+        onAddModel={() => setSettingsOpen(true)}
       />
       <RightPanel
         session={detail}

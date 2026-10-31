@@ -40,6 +40,7 @@ export function Chat(props: {
   onEditMessage: (index: number, text: string) => void;
   hasEarlier: boolean;
   onLoadEarlier: () => void;
+  onAddModel: () => void;
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -505,7 +506,14 @@ export function Chat(props: {
           <select
             className="model-pill"
             value={props.session.model_key}
-            onChange={(event) => props.onModel(event.target.value)}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === "__add__") {
+                props.onAddModel();
+                return;
+              }
+              props.onModel(value);
+            }}
             disabled={props.streaming}
             title="切换模型"
           >
@@ -515,6 +523,7 @@ export function Chat(props: {
                 {!item.available ? "（未配置）" : ""}
               </option>
             ))}
+            <option value="__add__">＋ 添加模型…</option>
           </select>
           <span className="composer-hint">{props.streaming ? "可随时停止" : "本地优先，API 兜底"}</span>
           {props.streaming ? (

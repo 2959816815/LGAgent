@@ -45,6 +45,9 @@ beforeEach(() => {
     getConfig: async () => ({ baseUrl: "http://test", token: "t" }),
     getSetupState: async () => ({ needsSetup: false, baseUrl: "https://api.deepseek.com", model: "deepseek-flash" }),
     getSettings: async () => ({ baseUrl: "https://api.deepseek.com", model: "deepseek-flash", hasApiKey: true }),
+    getModels: async () => [],
+    saveModels: async () => ({ baseUrl: "http://test", token: "t" }),
+    testModel: async () => ({ ok: true }),
     testDeepSeek: async () => ({ ok: true }),
     testSettings: async () => ({ ok: true }),
     saveDeepSeek: async () => ({ baseUrl: "http://test", token: "t" }),
@@ -107,7 +110,7 @@ describe("App", () => {
   it("opens the settings dialog from the sidebar", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "设置" }));
-    expect(await screen.findByPlaceholderText("留空表示不修改")).toBeTruthy();
+    expect(await screen.findByText("＋ 添加模型")).toBeTruthy();
     expect(screen.getByText("本地服务已连接")).toBeTruthy();
   });
 });

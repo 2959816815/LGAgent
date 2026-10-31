@@ -21,11 +21,39 @@ interface SettingsSnapshot {
   hasApiKey: boolean;
 }
 
+interface ConfiguredModel {
+  id: string;
+  kind: "api" | "local";
+  label: string;
+  base_url: string;
+  model: string;
+  hasKey?: boolean;
+}
+
+interface ModelSaveEntry {
+  id: string;
+  kind: "api" | "local";
+  label: string;
+  base_url: string;
+  model: string;
+  api_key?: string;
+}
+
+interface ModelTestInput {
+  kind: "api" | "local";
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+}
+
 interface Window {
   desktop?: {
     getConfig(): Promise<DesktopConfig>;
     getSetupState(): Promise<SetupState>;
     getSettings(): Promise<SettingsSnapshot>;
+    getModels(): Promise<ConfiguredModel[]>;
+    saveModels(models: ModelSaveEntry[]): Promise<DesktopConfig>;
+    testModel(input: ModelTestInput): Promise<{ ok: boolean }>;
     testDeepSeek(input: DeepSeekInput): Promise<{ ok: boolean }>;
     testSettings(input: DeepSeekInput): Promise<{ ok: boolean }>;
     saveDeepSeek(input: DeepSeekInput): Promise<DesktopConfig>;

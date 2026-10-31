@@ -1,9 +1,44 @@
 import { useEffect, useState } from "react";
 
-interface SettingsState {
-  baseUrl: string;
+interface ModelEntry {
+  id: string;
+  kind: "api" | "local";
+  label: string;
+  base_url: string;
   model: string;
-  hasApiKey: boolean;
+  hasKey: boolean;
+  /** 仅表单内使用：新填写的 Key，留空表示沿用已保存的 */
+  apiKey: string;
+}
+
+interface DraftModel {
+  index: number | null;
+  kind: "api" | "local";
+  label: string;
+  base_url: string;
+  model: string;
+  apiKey: string;
+}
+
+function toEntry(raw: ConfiguredModel): ModelEntry {
+  return {
+    id: String(raw.id || ""),
+    kind: raw.kind === "local" ? "local" : "api",
+    label: String(raw.label || raw.id || ""),
+    base_url: String(raw.base_url || ""),
+    model: String(raw.model || ""),
+    hasKey: Boolean(raw.hasKey),
+    apiKey: "",
+  };
+}
+
+function slug(text: string): string {
+  const base = text
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24);
+  return base || `model-${Date.now().toString(36)}`;
 }
 
 export function SettingsDialog({
@@ -13,27 +48,19 @@ export function SettingsDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [loaded, setLoaded] = useState<SettingsState | null>(null);
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [model, setModel] = useState("");
+  const [models, setModels] = useState<ModelEntry[]>([]);
+  const [draft, setDraft] = useState<DraftModel | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const desktop = window.desktop;
-    if (!desktop) {
-      setLoaded({ baseUrl: "", model: "", hasApiKey: false });
-      return;
-    }
+    if (!desktop) return;
     desktop
-      .getSettings()
-      .then((state) => {
-        if (cancelled) return;
-        setLoaded(state);
-        setBaseUrl(state.baseUrl);
-        setModel(state.model);
+      .getModels()
+      .then((list) => {
+        if (!cancelled) setModels((list || []).map(toEntry));
       })
       .catch((error) => {
         if (!cancelled) setMessage(error instanceof Error ? error.message : String(error));
@@ -43,88 +70,234 @@ export function SettingsDialog({
     };
   }, []);
 
-  const canSubmit = Boolean(loaded?.hasApiKey || apiKey.trim());
+  function startAdd(): void {
+    setDraft({
+      index: null,
+      kind: "api",
+      label: "",
+      base_url: "https://",
+      model: "",
+      apiKey: "",
+    });
+    setMessage("");
+  }
 
-  async function run(action: () => Promise<unknown>, success: string): Promise<boolean> {
+  function startEdit(index: number): void {
+    const item = models[index];
+    setDraft({
+      index,
+      kind: item.kind,
+      label: item.label,
+      base_url: item.base_url,
+      model: item.model,
+      apiKey: "",
+    });
+    setMessage("");
+  }
+
+  function removeAt(index: number): void {
+    setModels((previous) => previous.filter((_, position) => position !== index));
+  }
+
+  function commitDraft(): void {
+    if (!draft) return;
+    const label = draft.label.trim() || draft.model.trim();
+    if (!label) {
+      setMessage("请填写名称");
+      return;
+    }
+    const baseUrl = draft.base_url.trim();
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      setMessage("地址必须以 http:// 或 https:// 开头");
+      return;
+    }
+    const model = draft.model.trim();
+    if (!model) {
+      setMessage("请填写模型名（Ollama 里 `ollama list` 的名字）");
+      return;
+    }
+    const existing = draft.index !== null ? models[draft.index] : null;
+    const entry: ModelEntry = {
+      id: existing ? existing.id : slug(label),
+      kind: draft.kind,
+      label,
+      base_url: baseUrl,
+      model,
+      hasKey: draft.apiKey.trim() ? true : existing ? existing.hasKey : false,
+      apiKey: draft.apiKey.trim(),
+    };
+    setModels((previous) =>
+      draft.index !== null
+        ? previous.map((item, position) => (position === draft.index ? entry : item))
+        : [...previous, entry],
+    );
+    setDraft(null);
+    setMessage("");
+  }
+
+  async function testDraft(): Promise<void> {
+    const desktop = window.desktop;
+    if (!desktop || !draft) return;
     setBusy(true);
     setMessage("");
     try {
-      await action();
-      setMessage(success);
-      return true;
+      await desktop.testModel({
+        kind: draft.kind,
+        baseUrl: draft.base_url,
+        model: draft.model,
+        apiKey: draft.apiKey,
+      });
+      setMessage("连接成功");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
-      return false;
     } finally {
       setBusy(false);
     }
   }
 
-  async function test(): Promise<void> {
+  async function saveAll(): Promise<void> {
     const desktop = window.desktop;
-    if (!desktop) return;
-    await run(() => desktop.testSettings({ apiKey, baseUrl, model }), "连接成功");
-  }
-
-  async function save(): Promise<void> {
-    const desktop = window.desktop;
-    if (!desktop) return;
-    const ok = await run(() => desktop.saveSettings({ apiKey, baseUrl, model }), "已保存");
-    if (ok) onSaved();
+    if (!desktop || draft) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await desktop.saveModels(
+        models.map((item) => ({
+          id: item.id,
+          kind: item.kind,
+          label: item.label,
+          base_url: item.base_url,
+          model: item.model,
+          api_key: item.apiKey,
+        })),
+      );
+      onSaved();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <form
-        className="modal-card"
+        className="modal-card settings-card"
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          void save();
+          void saveAll();
         }}
       >
-        <h2>设置</h2>
-        {!loaded ? (
-          <p className="setup-message">加载中…</p>
-        ) : (
-          <>
+        <h2>设置 · 模型</h2>
+        <p className="settings-hint">
+          本地模型连接 Ollama；API 模型需要填写 Key 与地址。Key 会加密保存在本机。
+        </p>
+
+        <div className="model-list">
+          {models.map((item, index) => (
+            <div className="model-row" key={item.id}>
+              <div className="model-row-main">
+                <strong>{item.label}</strong>
+                <span className="model-row-meta">
+                  {item.kind === "local"
+                    ? "本地 Ollama"
+                    : item.hasKey
+                      ? "API · 已配置 Key"
+                      : "API · 未配置 Key"}
+                  {" · "}
+                  <code>{item.model}</code>
+                </span>
+              </div>
+              <div className="model-row-actions">
+                <button type="button" onClick={() => startEdit(index)} disabled={!!draft}>
+                  编辑
+                </button>
+                <button type="button" className="danger" onClick={() => removeAt(index)}>
+                  删除
+                </button>
+              </div>
+            </div>
+          ))}
+          {models.length === 0 && <p className="setup-message">还没有模型</p>}
+        </div>
+
+        <button type="button" className="model-add" onClick={startAdd} disabled={!!draft}>
+          ＋ 添加模型
+        </button>
+
+        {draft && (
+          <div className="model-form">
             <label>
-              API Key
+              名称
               <input
-                aria-label="API Key"
-                type="password"
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder="留空表示不修改"
-                autoComplete="off"
+                aria-label="模型名称"
+                value={draft.label}
+                onChange={(event) => setDraft({ ...draft, label: event.target.value })}
               />
             </label>
             <label>
-              Base URL
+              类型
+              <select
+                aria-label="模型类型"
+                value={draft.kind}
+                onChange={(event) =>
+                  setDraft({ ...draft, kind: event.target.value as "api" | "local" })
+                }
+              >
+                <option value="api">API 模型</option>
+                <option value="local">本地 Ollama</option>
+              </select>
+            </label>
+            <label>
+              {draft.kind === "local" ? "服务地址" : "Base URL"}
               <input
-                aria-label="Base URL"
-                value={baseUrl}
-                onChange={(event) => setBaseUrl(event.target.value)}
+                aria-label="模型地址"
+                value={draft.base_url}
+                onChange={(event) => setDraft({ ...draft, base_url: event.target.value })}
               />
             </label>
             <label>
-              模型
+              模型名
               <input
-                aria-label="模型"
-                value={model}
-                onChange={(event) => setModel(event.target.value)}
+                aria-label="模型名"
+                value={draft.model}
+                onChange={(event) => setDraft({ ...draft, model: event.target.value })
+                }
               />
             </label>
-          </>
+            {draft.kind === "api" && (
+              <label>
+                API Key
+                <input
+                  aria-label="API Key"
+                  type="password"
+                  value={draft.apiKey}
+                  onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
+                  placeholder="留空表示不修改"
+                  autoComplete="off"
+                />
+              </label>
+            )}
+            <div className="model-form-actions">
+              <button type="button" onClick={() => void testDraft()} disabled={busy}>
+                测试连接
+              </button>
+              <button type="button" className="primary" onClick={commitDraft}>
+                保存模型
+              </button>
+              <button type="button" onClick={() => setDraft(null)}>
+                取消
+              </button>
+            </div>
+          </div>
         )}
+
         <div className="modal-actions">
           <button type="button" onClick={onClose} disabled={busy}>
-            取消
+            关闭
           </button>
-          <button type="button" onClick={() => void test()} disabled={busy || !canSubmit}>
-            测试连接
-          </button>
-          <button type="submit" className="primary" disabled={busy || !canSubmit}>
+          <button type="submit" className="primary" disabled={busy || !!draft}>
             保存
           </button>
         </div>

@@ -60,6 +60,7 @@ function makeProps() {
     onRegenerate: vi.fn(),
     onEditMessage: vi.fn(),
     onLoadEarlier: vi.fn(),
+    onAddModel: vi.fn(),
   };
 }
 
