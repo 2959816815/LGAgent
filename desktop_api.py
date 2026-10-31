@@ -133,12 +133,29 @@ def _mcp_status_json(status: Any) -> dict:
 COMPACT_RATIO = 0.7
 COMPACT_KEEP_RECENT = 10
 SUMMARY_PREFIX = "【较早对话的摘要】"
+# 每张图片按固定 token 估算（与前端 estimateContext 保持一致）。
+IMAGE_TOKEN_ESTIMATE = 1000
+
+
+def _image_part_count(message) -> int:
+    content = getattr(message, "content", "")
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    )
 
 
 def estimate_tokens(messages: list) -> int:
-    """粗略估算 token 数（与前端一致：按字符数的 1/4）。"""
-    chars = sum(len(_text(getattr(message, "content", ""))) for message in messages)
-    return max(0, chars // 4)
+    """粗略估算 token 数：文字按字符数 1/4，图片按每张 1000。"""
+    chars = 0
+    images = 0
+    for message in messages:
+        chars += len(_text(getattr(message, "content", "")))
+        images += _image_part_count(message)
+    return max(0, chars // 4 + images * IMAGE_TOKEN_ESTIMATE)
 
 
 def summarize_messages(messages: list, model_key: str) -> str:

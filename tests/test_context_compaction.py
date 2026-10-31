@@ -35,6 +35,37 @@ class EstimateTokenTests(unittest.TestCase):
         self.assertLess(tokens, 200)
 
 
+class ImageTokenTests(unittest.TestCase):
+    def _with_image(self, text: str = "") -> HumanMessage:
+        parts: list = []
+        if text:
+            parts.append({"type": "text", "text": text})
+        parts.append(
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+        )
+        return HumanMessage(content=parts)
+
+    def test_images_count_towards_budget(self):
+        text_only = estimate_tokens([HumanMessage(content="字" * 400)])
+
+        with_image = estimate_tokens([self._with_image("字" * 400)])
+
+        self.assertGreaterEqual(with_image - text_only, 900)
+
+    def test_image_only_message_is_not_free(self):
+        tokens = estimate_tokens([self._with_image()])
+
+        self.assertGreaterEqual(tokens, 900)
+
+    def test_images_alone_can_trigger_compaction(self):
+        messages = [self._with_image() for _ in range(20)]
+        session = Session("20260101-000000-abcd", "会话", "", "", messages)
+
+        changed = compact_session(session, "local", 15_000, lambda items, key: "摘要")
+
+        self.assertTrue(changed)
+
+
 class CompactTests(unittest.TestCase):
     def _session(self, count: int) -> Session:
         return Session("20260101-000000-abcd", "会话", "", "", make_messages(count))
