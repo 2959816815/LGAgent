@@ -25,6 +25,7 @@ function createSettingsStore({ filePath, encrypt, decrypt }) {
         label: "deepseek-v4.1-flash",
         base_url: DEFAULTS.baseUrl,
         model: DEFAULTS.model,
+        supports_vision: false,
         key_encrypted: null,
       },
       {
@@ -33,6 +34,7 @@ function createSettingsStore({ filePath, encrypt, decrypt }) {
         label: "本地 qwen3.5",
         base_url: LOCAL_DEFAULTS.baseUrl,
         model: LOCAL_DEFAULTS.model,
+        supports_vision: false,
         key_encrypted: null,
       },
     ];
@@ -56,6 +58,7 @@ function createSettingsStore({ filePath, encrypt, decrypt }) {
       label: String(item.label || id).trim() || id,
       base_url: baseUrl,
       model,
+      supports_vision: Boolean(item.supports_vision),
       key_encrypted:
         typeof item.key_encrypted === "string" ? item.key_encrypted : null,
     };
@@ -119,6 +122,7 @@ function createSettingsStore({ filePath, encrypt, decrypt }) {
       label: item.label,
       base_url: item.base_url,
       model: item.model,
+      supports_vision: Boolean(item.supports_vision),
       api_key:
         item.kind === "api" && item.key_encrypted
           ? safeDecrypt(item.key_encrypted)
@@ -154,12 +158,20 @@ function createSettingsStore({ filePath, encrypt, decrypt }) {
       if (kind === "local") keyEncrypted = null;
       else if (provided) keyEncrypted = encrypt(provided);
 
+      const supportsVision =
+        kind === "local"
+          ? false
+          : item.supports_vision === undefined
+            ? (previous && previous.supports_vision) || false
+            : Boolean(item.supports_vision);
+
       return {
         id,
         kind,
         label,
         base_url: baseUrl,
         model,
+        supports_vision: supportsVision,
         key_encrypted: keyEncrypted,
       };
     });
@@ -193,6 +205,7 @@ function createSettingsStore({ filePath, encrypt, decrypt }) {
       label: existing ? existing.label : "deepseek-v4.1-flash",
       base_url: String(baseUrl || DEFAULTS.baseUrl).trim(),
       model: String(model || DEFAULTS.model).trim(),
+      supports_vision: existing ? Boolean(existing.supports_vision) : false,
       key_encrypted: encrypt(trimmed),
     };
     const next = existing

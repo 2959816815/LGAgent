@@ -81,6 +81,29 @@ test("saveModels stores a new key encrypted", () => {
   assert.equal(fs.readFileSync(store.filePath, "utf8").includes("sk-new"), false);
 });
 
+test("keeps supports_vision for vision models", () => {
+  const store = tempStore();
+  const models = store.getModels();
+  models.push({
+    id: "qwenvl",
+    kind: "api",
+    label: "千问 VL",
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "qwen3-vl-plus",
+    api_key: "sk-x",
+    supports_vision: true,
+  });
+  store.saveModels(models);
+  assert.equal(
+    store.getModelsForSidecar().find((item) => item.id === "qwenvl").supports_vision,
+    true,
+  );
+  assert.equal(
+    store.getModels().find((item) => item.id === "qwenvl").supports_vision,
+    true,
+  );
+});
+
 test("saveModels rejects invalid entries", () => {
   const store = tempStore();
   assert.throws(

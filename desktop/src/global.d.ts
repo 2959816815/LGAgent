@@ -28,6 +28,7 @@ interface ConfiguredModel {
   base_url: string;
   model: string;
   hasKey?: boolean;
+  supports_vision?: boolean;
 }
 
 interface ModelSaveEntry {
@@ -37,6 +38,7 @@ interface ModelSaveEntry {
   base_url: string;
   model: string;
   api_key?: string;
+  supports_vision?: boolean;
 }
 
 interface ModelTestInput {

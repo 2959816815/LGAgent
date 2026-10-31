@@ -7,6 +7,7 @@ interface ModelEntry {
   base_url: string;
   model: string;
   hasKey: boolean;
+  supports_vision: boolean;
   /** 仅表单内使用：新填写的 Key，留空表示沿用已保存的 */
   apiKey: string;
 }
@@ -17,6 +18,7 @@ interface DraftModel {
   label: string;
   base_url: string;
   model: string;
+  supports_vision: boolean;
   apiKey: string;
 }
 
@@ -28,6 +30,7 @@ function toEntry(raw: ConfiguredModel): ModelEntry {
     base_url: String(raw.base_url || ""),
     model: String(raw.model || ""),
     hasKey: Boolean(raw.hasKey),
+    supports_vision: Boolean(raw.supports_vision),
     apiKey: "",
   };
 }
@@ -77,6 +80,7 @@ export function SettingsDialog({
       label: "",
       base_url: "https://",
       model: "",
+      supports_vision: false,
       apiKey: "",
     });
     setMessage("");
@@ -90,6 +94,7 @@ export function SettingsDialog({
       label: item.label,
       base_url: item.base_url,
       model: item.model,
+      supports_vision: item.supports_vision,
       apiKey: "",
     });
     setMessage("");
@@ -124,6 +129,7 @@ export function SettingsDialog({
       base_url: baseUrl,
       model,
       hasKey: draft.apiKey.trim() ? true : existing ? existing.hasKey : false,
+      supports_vision: draft.kind === "local" ? false : draft.supports_vision,
       apiKey: draft.apiKey.trim(),
     };
     setModels((previous) =>
@@ -169,6 +175,7 @@ export function SettingsDialog({
           base_url: item.base_url,
           model: item.model,
           api_key: item.apiKey,
+          supports_vision: item.supports_vision,
         })),
       );
       onSaved();
@@ -207,6 +214,7 @@ export function SettingsDialog({
                       : "API · 未配置 Key"}
                   {" · "}
                   <code>{item.model}</code>
+                  {item.supports_vision ? " · 支持图片" : ""}
                 </span>
               </div>
               <div className="model-row-actions">
@@ -266,6 +274,19 @@ export function SettingsDialog({
                 }
               />
             </label>
+            {draft.kind === "api" && (
+              <label className="model-checkbox">
+                <input
+                  type="checkbox"
+                  aria-label="支持图片"
+                  checked={draft.supports_vision}
+                  onChange={(event) =>
+                    setDraft({ ...draft, supports_vision: event.target.checked })
+                  }
+                />
+                支持图片（视觉模型）
+              </label>
+            )}
             {draft.kind === "api" && (
               <label>
                 API Key

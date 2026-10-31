@@ -62,6 +62,7 @@ describe("SettingsDialog", () => {
     });
     fireEvent.change(screen.getByLabelText("模型名"), { target: { value: "foo-1" } });
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-x" } });
+    fireEvent.click(screen.getByLabelText("支持图片"));
     fireEvent.click(screen.getByText("保存模型"));
     fireEvent.click(screen.getByText("保存"));
 
@@ -74,6 +75,7 @@ describe("SettingsDialog", () => {
       base_url: "https://example.com/v1",
       model: "foo-1",
       api_key: "sk-x",
+      supports_vision: true,
     });
     expect(saved[1]).toMatchObject({ id: "local", api_key: "" });
     expect(onSaved).toHaveBeenCalled();
