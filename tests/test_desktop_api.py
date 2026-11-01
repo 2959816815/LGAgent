@@ -308,11 +308,11 @@ class FakeGraph:
     def __init__(self):
         self.cancelled = False
 
-    def stream(self, *args, **kwargs):
+    def stream(self, payload, *args, **kwargs):
         yield ("messages", (FakeChunk(content="你"), {}))
         yield ("messages", (FakeChunk(content="好"), {}))
         yield ("updates", {"agent": {"messages": [AIMessage(content="你好")]}})
-        yield ("values", {"messages": [HumanMessage(content="hi"), AIMessage(content="你好")]})
+        yield ("values", {"messages": [*payload["messages"], AIMessage(content="你好")]})
 
 
 class BlockingGraph:

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import queue
+import socket
 import sys
 import threading
 import time
@@ -12,13 +13,21 @@ import uuid
 import httpx
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from graph_agent import SYSTEM_PROMPT, build_graph, build_llm
+from graph_agent import SYSTEM_PROMPT, build_graph, build_llm, collect_tools
+from context_builder import (
+    ContextBudgetError,
+    SummaryError,
+    build_view,
+    ensure_summary,
+    measure_tool_tokens,
+)
 from approval import ApprovalBroker, UndoEmpty, UndoEntry, set_current as set_approval_broker, undo_last
 from mcp_client import McpError
 from mcp_manager import McpManager, McpManagerError
@@ -232,87 +241,42 @@ def _mcp_status_json(status: Any) -> dict:
     }
 
 
-COMPACT_RATIO = 0.7
-COMPACT_KEEP_RECENT = 10
-SUMMARY_PREFIX = "【较早对话的摘要】"
-# 每张图片按固定 token 估算（与前端 estimateContext 保持一致）。
-IMAGE_TOKEN_ESTIMATE = 1000
+_NETWORK_EXC_NAMES = {
+    "ConnectError",
+    "ConnectTimeout",
+    "ReadTimeout",
+    "RemoteProtocolError",
+    "APIConnectionError",
+    "APITimeoutError",
+    "gaierror",
+    "ConnectionError",
+    "ConnectionRefusedError",
+    "TimeoutError",
+}
+_NETWORK_HINTS = (
+    "connection refused",
+    "timed out",
+    "getaddrinfo failed",
+    "network is unreachable",
+    "temporary failure in name resolution",
+    "connection reset",
+)
 
 
-def _image_part_count(message) -> int:
-    content = getattr(message, "content", "")
-    if not isinstance(content, list):
-        return 0
-    return sum(
-        1
-        for part in content
-        if isinstance(part, dict) and part.get("type") in {"image_url", "image_ref"}
-    )
-
-
-def estimate_tokens(messages: list) -> int:
-    """粗略估算 token 数：文字按字符数 1/4，图片按每张 1000。"""
-    chars = 0
-    images = 0
-    for message in messages:
-        chars += len(_text(getattr(message, "content", "")))
-        images += _image_part_count(message)
-    return max(0, chars // 4 + images * IMAGE_TOKEN_ESTIMATE)
-
-
-def summarize_messages(messages: list, model_key: str) -> str:
-    """调用模型把早期消息压缩成一段中文摘要。"""
-    lines: list[str] = []
-    for message in messages:
-        role = {"human": "用户", "ai": "助手", "tool": "工具"}.get(
-            getattr(message, "type", ""), "消息"
-        )
-        text = _text(message.content).strip()
-        if text:
-            lines.append(f"{role}: {text}")
-    if not lines:
-        return ""
-    transcript = "\n".join(lines)[-20_000:]
-    response = build_llm(model_key).invoke(
-        [
-            HumanMessage(
-                content=(
-                    "请把下面这段对话压缩成简洁的中文摘要，保留关键事实、结论、"
-                    "涉及的文件路径和未完成事项；不要编造内容。\n\n" + transcript
-                )
-            )
-        ]
-    )
-    return _text(response.content).strip()[:2_000]
-
-
-def compact_session(
-    session, model_key: str, context_window: int, summarizer=None, force: bool = False
-) -> bool:
-    """上下文超阈值时压缩早期消息；force=True 时忽略阈值（手动触发）。"""
-    if not force and context_window <= 0:
-        return False
-    if len(session.messages) <= COMPACT_KEEP_RECENT + 1:
-        return False
-    if not force and estimate_tokens(session.messages) < int(context_window * COMPACT_RATIO):
-        return False
-    older = session.messages[:-COMPACT_KEEP_RECENT]
-    if not older:
-        return False
-    try:
-        summary = (summarizer or summarize_messages)(older, model_key)
-    except Exception:  # noqa: BLE001
-        # 摘要失败不阻塞正常对话
-        return False
-    if not summary:
-        return False
-
-    session.summary = (
-        f"{session.summary}\n{summary}".strip() if session.summary else summary
-    )
-    session.summary_count += len(older)
-    session.messages = session.messages[-COMPACT_KEEP_RECENT:]
-    return True
+def is_network_failure(exc: BaseException) -> bool:
+    """Return True for connection/timeout failures, not HTTP status errors."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        names = {base.__name__ for base in type(current).__mro__}
+        if names & _NETWORK_EXC_NAMES:
+            return True
+        text = str(current).lower()
+        if any(hint in text for hint in _NETWORK_HINTS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def create_app(
@@ -322,7 +286,7 @@ def create_app(
     mcp_manager=None,
     data_root: Path | None = None,
     workspace: Path | None = None,
-    summarizer=None,
+    model_factory=None,
 ) -> FastAPI:
     data_dir = Path(data_root or os.getenv("DSH_DATA_DIR") or root)
     store = _create_session_store(data_dir)
@@ -349,16 +313,52 @@ def create_app(
     def emit(run: RunState, event: str, data: dict) -> None:
         run.events.put((event, data))
 
+    model_factory = model_factory or build_llm
+
+    def _extra_tools():
+        try:
+            return build_mcp_tools(mcp, mcp.enabled_ids())
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _tool_tokens_for(key: str, extra_tools=None) -> int:
+        try:
+            return measure_tool_tokens(
+                collect_tools(manager, model_key=key, extra_tools=extra_tools or [])
+            )
+        except Exception:  # noqa: BLE001
+            return 2000
+
+    def _fallback_profile(exclude_key: str):
+        candidates = [
+            profile
+            for profile in list_profiles()
+            if profile.provider == "ollama" and profile.key != exclude_key
+        ]
+        candidates.sort(key=lambda profile: (profile.key != "local", profile.key))
+        return candidates[0] if candidates else None
+
+    def _context_json(session, key: str):
+        try:
+            profile = get_profile(key)
+            _, stats = build_view(
+                session,
+                profile,
+                SYSTEM_PROMPT,
+                _tool_tokens_for(key, _extra_tools()),
+            )
+            return stats.as_dict()
+        except Exception:  # noqa: BLE001
+            return None
+
     def run_graph(run: RunState, session, text: str) -> None:
         from langchain_core.messages import AIMessageChunk
 
-        final_messages = None
         tool_started: dict[str, float] = {}
         emitted_tool_end: set[str] = set()
+        final_key = effective_model_key(session)
 
         def emit_tool_end(message: ToolMessage) -> None:
-            # 同一个 ToolMessage 可能同时出现在 messages 和 updates 两种模式里，
-            # 按 call_id 去重，避免前端重复更新同一张工具卡片。
             call_id = message.tool_call_id
             if call_id in emitted_tool_end:
                 return
@@ -376,42 +376,45 @@ def create_app(
                     ),
                 },
             )
-        try:
-            key = effective_model_key(session)
-            session.model_key = key
-            manager.set_model_key(key)
-            manager.set_current_session(session.id)
-            try:
-                profile = get_profile(key)
-                if compact_session(session, key, profile.context_window, summarizer):
-                    store.save(session)
-            except Exception:  # noqa: BLE001
-                # 压缩失败不影响本次对话
-                pass
-            broker = ApprovalBroker(
-                run.run_id,
-                session.id,
-                lambda event, data: emit(run, event, data),
-                undo_entries.setdefault(session.id, []),
+
+        def attempt(key: str, profile, allow_summary: bool):
+            tool_started.clear()
+            emitted_tool_end.clear()
+            extra_tools = [] if profile.provider == "ollama" else _extra_tools()
+            tool_tokens = _tool_tokens_for(key, extra_tools)
+            if allow_summary and profile.provider != "ollama":
+                fallback = _fallback_profile(key)
+                if fallback is not None:
+                    try:
+                        ensure_summary(
+                            session,
+                            profile,
+                            fallback,
+                            SYSTEM_PROMPT,
+                            _tool_tokens_for(fallback.key),
+                            model_factory,
+                            store.save,
+                        )
+                    except Exception:  # noqa: BLE001
+                        # 摘要失败不阻塞本次对话
+                        pass
+            view, stats = build_view(
+                session,
+                profile,
+                SYSTEM_PROMPT,
+                tool_tokens,
+                hydrate=lambda items: hydrate_messages(items, attachment_store),
             )
-            run.broker = broker
-            set_approval_broker(broker)
-            extra_tools = []
-            try:
-                extra_tools = build_mcp_tools(mcp, mcp.enabled_ids())
-            except Exception:
-                extra_tools = []
-            graph = graph_builder(manager, model_key=key, extra_tools=extra_tools)
-            messages = [SystemMessage(content=SYSTEM_PROMPT)]
-            if session.summary:
-                messages.append(
-                    SystemMessage(content=f"{SUMMARY_PREFIX}\n{session.summary}")
+            if not stats.fits:
+                raise ContextBudgetError(
+                    f"{profile.label} 的上下文窗口放不下系统提示和工具："
+                    f"视图 {stats.view_tokens} tokens，窗口 {profile.context_window}。"
                 )
-            # 发给模型前把附件引用还原成 data URL（视觉接口只认这个）
-            messages.extend(hydrate_messages(session.messages, attachment_store))
-            final_messages = messages
+            graph = graph_builder(manager, model_key=key, extra_tools=extra_tools)
+            initial_count = len(view)
+            final_messages = view
             for mode, payload in graph.stream(
-                {"messages": messages},
+                {"messages": view},
                 config={"recursion_limit": 25},
                 stream_mode=["messages", "updates", "values"],
             ):
@@ -446,22 +449,76 @@ def create_app(
                                 emit_tool_end(message)
                 elif mode == "values":
                     final_messages = payload["messages"]
-            # 落库前把 data URL 转回引用，避免 base64 进入会话存储
-            session.messages = dehydrate_messages(
-                [m for m in final_messages if not isinstance(m, SystemMessage)],
-                attachment_store,
+            return final_messages[initial_count:]
+
+        try:
+            key = effective_model_key(session)
+            profile = get_profile(key)
+            session.model_key = key
+            manager.set_model_key(key)
+            manager.set_current_session(session.id)
+            broker = ApprovalBroker(
+                run.run_id,
+                session.id,
+                lambda event, data: emit(run, event, data),
+                undo_entries.setdefault(session.id, []),
             )
+            run.broker = broker
+            set_approval_broker(broker)
+            try:
+                new_messages = attempt(key, profile, allow_summary=True)
+                final_key = key
+            except Exception as exc:
+                fallback = _fallback_profile(key)
+                can_fallback = (
+                    profile.provider != "ollama"
+                    and fallback is not None
+                    and is_network_failure(exc)
+                    and _probe_local(fallback.base_url)[0]
+                )
+                if not can_fallback:
+                    raise
+                reason = str(exc).strip()[:200] or "网络不可用"
+                emit(
+                    run,
+                    "model_fallback",
+                    {
+                        "run_id": run.run_id,
+                        "from": key,
+                        "to": fallback.key,
+                        "label": fallback.label,
+                        "reason": reason,
+                        "restart": True,
+                    },
+                )
+                session.model_key = fallback.key
+                store.save(session)
+                manager.set_model_key(fallback.key)
+                try:
+                    new_messages = attempt(fallback.key, fallback, allow_summary=False)
+                    final_key = fallback.key
+                except Exception as local_exc:
+                    raise RuntimeError(
+                        f"云端连接失败（{exc}）；本地模型重试也失败（{local_exc}）"
+                    ) from local_exc
+            session.messages.extend(dehydrate_messages(new_messages, attachment_store))
             store.save(session)
         except Exception as exc:
             emit(run, "error", {"run_id": run.run_id, "code": "run_error", "message": str(exc)})
         finally:
             set_approval_broker(None)
-            # 先释放会话锁，再发送 done。否则客户端收到 done 后立刻发下一条消息时，
-            # active_runs 可能还没清理，会错误返回“已有回复正在生成”。
             with runs_lock:
                 if active_runs.get(session.id) == run.run_id:
                     active_runs.pop(session.id, None)
-            emit(run, "done", {"run_id": run.run_id, "interrupted": run.cancel.is_set()})
+            emit(
+                run,
+                "done",
+                {
+                    "run_id": run.run_id,
+                    "interrupted": run.cancel.is_set(),
+                    "model_key": final_key,
+                },
+            )
             run.events.put(None)
 
     app = FastAPI(title="LangGraph Agent Desktop API")
@@ -550,15 +607,18 @@ def create_app(
         return initial_model_key()
 
     def session_json(session, attachment_url=None) -> dict:
+        key = effective_model_key(session)
         return {
             "id": session.id,
             "title": session.title,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
-            "model_key": effective_model_key(session),
+            "model_key": key,
             "message_count": len(session.messages),
             "summary": session.summary,
             "summary_count": session.summary_count,
+            "summary_upto": session.summary_upto,
+            "context": _context_json(session, key),
             "messages": [
                 _message_json(m, attachment_url) for m in session.messages
             ],
@@ -696,7 +756,12 @@ def create_app(
         session.model_key = key
         store.save(session)
         manager.set_model_key(key)
-        return {"id": session_id, "model_key": key, "label": profile.label}
+        return {
+            "id": session_id,
+            "model_key": key,
+            "label": profile.label,
+            "context": _context_json(session, key),
+        }
 
     @app.post("/api/sessions/{session_id}/messages", dependencies=[Depends(require_token)])
     def post_message(session_id: str, payload: dict):
@@ -797,19 +862,30 @@ def create_app(
                 session = store.load(session_id)
             except SessionStoreError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            if len(session.messages) <= COMPACT_KEEP_RECENT + 1:
-                raise HTTPException(status_code=400, detail="消息太少，暂时不需要压缩")
             key = effective_model_key(session)
             try:
                 profile = get_profile(key)
             except ModelConfigError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if not compact_session(
-                session, key, profile.context_window, summarizer, force=True
-            ):
-                raise HTTPException(status_code=502, detail="压缩失败：未能生成摘要")
-            store.save(session)
-            return session_json(session, attachment_link(request))
+            target = _fallback_profile(key) or profile
+            try:
+                changed = ensure_summary(
+                    session,
+                    profile,
+                    target,
+                    SYSTEM_PROMPT,
+                    _tool_tokens_for(target.key),
+                    model_factory,
+                    store.save,
+                    force=True,
+                )
+            except SummaryError as exc:
+                raise HTTPException(status_code=502, detail=f"压缩失败：{exc}") from exc
+            if not changed:
+                raise HTTPException(status_code=400, detail="没有可更新的摘要")
+            payload = session_json(session, attachment_link(request))
+            payload["summary_model"] = key
+            return payload
 
     @app.get("/api/attachments/{attachment_id}")
     def get_attachment(

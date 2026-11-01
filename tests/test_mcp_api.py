@@ -162,8 +162,11 @@ class McpApiTests(unittest.TestCase):
             return CapturingGraph(extra_tools)
 
         client = TestClient(self._app(graph_builder=builder))
+        # 本地模型只启用核心工具，MCP 工具只传给云端模型。
         session = client.post(
-            "/api/sessions", json={"title": "MCP"}, headers=self.headers
+            "/api/sessions",
+            json={"title": "MCP", "model_key": "deepseek"},
+            headers=self.headers,
         ).json()
         response = client.post(
             f"/api/sessions/{session['id']}/messages",

@@ -210,6 +210,8 @@ def build_chat_model(key: str) -> ChatOpenAI:
         raise ModelConfigError(
             f"未找到 {profile.key_env}，无法切换到 {profile.label}。请检查 .env。"
         )
+    from httpx import Client, Timeout
+
     return ChatOpenAI(
         model=profile.model,
         api_key=profile.api_key or "ollama",
@@ -217,6 +219,7 @@ def build_chat_model(key: str) -> ChatOpenAI:
         temperature=0,
         timeout=profile.timeout,
         max_retries=profile.max_retries,
+        http_client=Client(timeout=Timeout(profile.timeout, connect=5.0)),
     )
 
 
