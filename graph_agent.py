@@ -750,12 +750,61 @@ def build_llm(model_key: str | None = None) -> ChatOpenAI:
     return build_chat_model(model_key or initial_model_key())
 
 
-def select_tools(read_only: bool = False) -> list[Any]:
-    """返回内置工具；read_only 时剔除所有写类工具（子 agent 默认只读）。"""
+CORE_TOOL_NAMES = frozenset(
+    {
+        "get_current_time",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "web_search",
+        "web_fetch",
+        "download_file",
+        "read_csv",
+        "read_json",
+        "read_pdf",
+    }
+)
+
+
+def select_tools(read_only: bool = False, core_only: bool = False) -> list[Any]:
+    """返回内置工具；core_only 时只保留本地小模型可用的核心工具。"""
     tools = list(TOOLS)
+    if core_only:
+        tools = [
+            tool for tool in tools
+            if getattr(tool, "name", "") in CORE_TOOL_NAMES
+        ]
     if read_only:
-        tools = [tool for tool in tools if getattr(tool, "name", "") not in WRITE_TOOL_NAMES]
+        tools = [
+            tool for tool in tools
+            if getattr(tool, "name", "") not in WRITE_TOOL_NAMES
+        ]
     return tools
+
+
+def collect_tools(
+    manager=None,
+    include_subagent_tools: bool = True,
+    model_key: str | None = None,
+    extra_tools: list[Any] | None = None,
+    read_only: bool = False,
+) -> list[Any]:
+    """返回某个模型实际会绑定的工具列表（也供 token 预算测量）。"""
+    try:
+        profile = get_profile(model_key or initial_model_key())
+    except ModelConfigError:
+        profile = None
+    core_only = profile is not None and profile.provider == "ollama"
+    tools = select_tools(read_only, core_only=core_only)
+    if not core_only:
+        if include_subagent_tools and manager is not None:
+            from subagent_tools import build_subagent_tools
+
+            tools = tools + build_subagent_tools(manager)
+        if extra_tools:
+            tools = tools + list(extra_tools)
+    tools = wrap_tools(tools)
+    return wrap_mcp_tools(tools)
 
 
 def build_graph(
@@ -766,16 +815,13 @@ def build_graph(
     read_only: bool = False,
 ):
     """构建并编译 Agent 图：agent -> (tools -> agent)* -> END。"""
-    tools = select_tools(read_only)
-    if include_subagent_tools and manager is not None:
-        from subagent_tools import build_subagent_tools
-
-        tools = tools + build_subagent_tools(manager)
-    if extra_tools:
-        tools = tools + list(extra_tools)
-    tools = wrap_tools(tools)
-    tools = wrap_mcp_tools(tools)
-
+    tools = collect_tools(
+        manager,
+        include_subagent_tools=include_subagent_tools,
+        model_key=model_key,
+        extra_tools=extra_tools,
+        read_only=read_only,
+    )
     llm_with_tools = build_llm(model_key).bind_tools(tools)
 
     def agent_node(state: MessagesState) -> dict:

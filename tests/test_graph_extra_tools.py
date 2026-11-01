@@ -43,6 +43,7 @@ class GraphExtraToolsTests(unittest.TestCase):
             graph_agent.build_graph(
                 manager=None,
                 include_subagent_tools=False,
+                model_key="deepseek",
                 extra_tools=[extra],
             )
         names = [tool.name for tool in fake.bound]

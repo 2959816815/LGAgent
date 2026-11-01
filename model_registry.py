@@ -99,7 +99,7 @@ def _dynamic_profiles() -> list[ModelProfile] | None:
                     timeout=float(_env("OLLAMA_TIMEOUT", "300")),
                     max_retries=0,
                     supports_vision=False,
-                    context_window=int(_env("OLLAMA_CONTEXT_WINDOW", "4096")),
+                    context_window=int(_env("OLLAMA_CONTEXT_WINDOW", "16384")),
                 )
             )
         else:
@@ -138,7 +138,7 @@ def list_profiles() -> list[ModelProfile]:
             timeout=float(_env("OLLAMA_TIMEOUT", "300")),
             max_retries=0,
             supports_vision=False,
-            context_window=int(_env("OLLAMA_CONTEXT_WINDOW", "4096")),
+            context_window=int(_env("OLLAMA_CONTEXT_WINDOW", "16384")),
         ),
         ModelProfile(
             key="deepseek",
