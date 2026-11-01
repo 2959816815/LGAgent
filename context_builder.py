@@ -254,42 +254,61 @@ def build_view(
         coverage = 0
     uncovered = messages[coverage:]
 
-    summary_text = truncate_to_tokens(
-        getattr(session, "summary", "") or "",
-        budget["summary_cap"],
-        SUMMARY_TRUNCATE_MARKER,
-    )
-    summary_message = (
-        SystemMessage(content=f"{SUMMARY_PREFIX}\n{summary_text}")
-        if summary_text
-        else None
-    )
-    summary_tokens = estimate_tokens([summary_message]) if summary_message else 0
+    def prepare(message: BaseMessage) -> tuple[BaseMessage, int]:
+        if profile.supports_vision:
+            return message, 0
+        return _replace_images(message)
 
-    remaining = budget["conversation"] - summary_tokens
-    turns = split_turns(uncovered)
-    selected: list[list[BaseMessage]] = []
+    full_prepared: list[BaseMessage] = []
     images_dropped = 0
-    for turn in reversed(turns):
-        prepared = []
-        for message in turn:
-            if not profile.supports_vision:
-                message, dropped = _replace_images(message)
+    for message in messages:
+        prepared_message, dropped = prepare(message)
+        images_dropped += dropped
+        full_prepared.append(prepared_message)
+
+    selected: list[list[BaseMessage]] = []
+    dropped_turns = 0
+    summary_message = None
+    summary_tokens = 0
+    if estimate_tokens(full_prepared) <= budget["conversation"]:
+        # 大窗口模型能装下完整历史时优先发原文，摘要不参与视图。
+        selected = [list(turn) for turn in split_turns(full_prepared)]
+    else:
+        summary_text = truncate_to_tokens(
+            getattr(session, "summary", "") or "",
+            budget["summary_cap"],
+            SUMMARY_TRUNCATE_MARKER,
+        )
+        summary_message = (
+            SystemMessage(content=f"{SUMMARY_PREFIX}\n{summary_text}")
+            if summary_text
+            else None
+        )
+        summary_tokens = estimate_tokens([summary_message]) if summary_message else 0
+        remaining = budget["conversation"] - summary_tokens
+        turns = split_turns(uncovered)
+        images_dropped = 0
+        for turn in reversed(turns):
+            prepared_turn = []
+            for message in turn:
+                prepared_message, dropped = prepare(message)
                 images_dropped += dropped
-            prepared.append(message)
-        cost = estimate_tokens(prepared)
-        if cost > remaining:
-            break
-        selected.insert(0, prepared)
-        remaining -= cost
-    if not selected and turns:
-        prepared = []
-        for message in turns[-1]:
-            if not profile.supports_vision:
-                message, dropped = _replace_images(message)
+                prepared_turn.append(prepared_message)
+            cost = estimate_tokens(prepared_turn)
+            if cost > remaining:
+                break
+            selected.insert(0, prepared_turn)
+            remaining -= cost
+        if not selected and turns:
+            prepared_turn = []
+            for message in turns[-1]:
+                prepared_message, dropped = prepare(message)
                 images_dropped += dropped
-            prepared.append(_truncate_message(message, budget["max_message"]))
-        selected = [prepared]
+                prepared_turn.append(
+                    _truncate_message(prepared_message, budget["max_message"])
+                )
+            selected = [prepared_turn]
+        dropped_turns = max(0, len(turns) - len(selected))
 
     view: list[BaseMessage] = [SystemMessage(content=system_prompt)]
     if summary_message is not None:
@@ -308,7 +327,7 @@ def build_view(
         system_tokens=system_tokens,
         summary_tokens=summary_tokens,
         recent_turns=len(selected),
-        dropped_turns=max(0, len(turns) - len(selected)),
+        dropped_turns=dropped_turns,
         images_dropped=images_dropped,
         fits=view_tokens <= profile.context_window,
     )

@@ -207,22 +207,25 @@ Offline turns are expected to be slow.
 returns `(messages, stats)`.
 
 1. Compute the budget above.
-2. Start with `SystemMessage(system_prompt)`.
-3. If `session.summary` is non-empty, truncate it to `summary_cap`, wrap it as
-   `SystemMessage("【较早对话的摘要】\n" + summary)`, and append it.
-4. Walk the uncovered messages, `session.messages[session.summary_upto:]`, from
+2. Prepare every message for the model: if `profile.supports_vision` is false,
+   replace image parts with the text part `[图片已省略]`.
+3. If the prepared full history fits the conversation budget, build the view
+   from the **full history** and do not inject the summary. Large-window models
+   therefore see the raw transcript whenever it fits, including after a manual
+   summary update.
+4. Otherwise, truncate `session.summary` to `summary_cap`, wrap it as
+   `SystemMessage("【较早对话的摘要】\n" + summary)`, and append it after the
+   system prompt.
+5. Walk the uncovered messages, `session.messages[session.summary_upto:]`, from
    newest to oldest in whole turns. Messages already covered by the summary
    are never sent again, so the summary and the raw transcript cannot duplicate
-   each other in the view. A turn begins at a `HumanMessage` and includes all
-   following `AIMessage` and `ToolMessage` entries until the next
-   `HumanMessage`. Include a turn only if it fits the remaining budget. Always
-   include the newest turn. If `summary_upto` is out of range, clamp it to 0
-   and use the full history.
-5. If the newest turn alone exceeds the budget, keep its `HumanMessage` and
+   each other. A turn begins at a `HumanMessage` and includes all following
+   `AIMessage` and `ToolMessage` entries until the next `HumanMessage`. Include
+   a turn only if it fits the remaining budget. Always include the newest turn.
+   If `summary_upto` is out of range, clamp it to 0 and use the full history.
+6. If the newest turn alone exceeds the budget, keep its `HumanMessage` and
    truncate each later message in that turn to `max_message` tokens with the
    marker `\n…[内容过长已截断]`.
-6. If `profile.supports_vision` is false, replace every image part with the
-   text part `[图片已省略]` and do not hydrate it.
 7. Run the existing `sanitize_messages` over the assembled view so that
    incomplete tool-call sequences cannot reach the model.
 8. Return statistics:
@@ -242,6 +245,7 @@ returns `(messages, stats)`.
 }
 ```
 
+`summary_tokens` is 0 when the full history fits and the summary is not used.
 `dropped_turns` counts uncovered turns that did not fit the budget. Turns covered
 by the summary are represented by the summary and are not counted as dropped.
 

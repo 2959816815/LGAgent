@@ -123,19 +123,24 @@ class ViewTests(unittest.TestCase):
         self.assertIsInstance(view[tool_index - 1], AIMessage)
         self.assertTrue(view[tool_index - 1].tool_calls)
 
-    def test_summary_is_injected_and_capped(self):
-        view, stats = build_view(
-            session([HumanMessage(content="问题")], summary="摘要" * 5000),
-            profile(window=4096),
-            "系统",
-            0,
+    def test_summary_is_injected_and_capped_when_history_does_not_fit(self):
+        messages = [
+            (HumanMessage if index % 2 == 0 else AIMessage)(content="内容" * 400)
+            for index in range(20)
+        ]
+        covered = SimpleNamespace(
+            messages=messages,
+            summary="摘要" * 5000,
+            summary_upto=18,
         )
+
+        view, stats = build_view(covered, profile(window=8192), "系统", 0)
 
         self.assertIn(SUMMARY_PREFIX, str(view[1].content))
         self.assertGreater(stats.summary_tokens, 0)
         self.assertLessEqual(stats.summary_tokens, stats.window)
 
-    def test_summarized_messages_are_not_sent_again(self):
+    def test_full_history_is_used_when_it_fits(self):
         messages = [
             (HumanMessage if index % 2 == 0 else AIMessage)(content=f"msg-{index}")
             for index in range(10)
@@ -145,11 +150,27 @@ class ViewTests(unittest.TestCase):
         view, stats = build_view(covered, profile(), "系统", 0)
 
         contents = [str(message.content) for message in view]
-        self.assertFalse(any("msg-0" in text or "msg-6" in text for text in contents))
-        self.assertTrue(any("msg-8" in text for text in contents))
+        self.assertTrue(any("msg-0" in text for text in contents))
         self.assertTrue(any("msg-9" in text for text in contents))
-        self.assertEqual(stats.recent_turns, 1)
+        self.assertEqual(stats.summary_tokens, 0)
         self.assertEqual(stats.dropped_turns, 0)
+
+    def test_summarized_messages_are_not_sent_again_when_history_does_not_fit(self):
+        messages = [
+            (HumanMessage if index % 2 == 0 else AIMessage)(
+                content=f"msg-{index} " + "内容" * 400
+            )
+            for index in range(40)
+        ]
+        covered = SimpleNamespace(messages=messages, summary="摘要", summary_upto=30)
+
+        view, stats = build_view(covered, profile(), "系统", 0)
+
+        contents = [str(message.content) for message in view]
+        self.assertFalse(any("msg-0 " in text or "msg-20 " in text for text in contents))
+        self.assertTrue(any("msg-30 " in text for text in contents))
+        self.assertTrue(any("msg-39 " in text for text in contents))
+        self.assertGreater(stats.summary_tokens, 0)
 
     def test_images_are_replaced_for_non_vision_models(self):
         messages = [
