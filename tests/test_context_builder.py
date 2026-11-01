@@ -202,3 +202,126 @@ class ToolTokenTests(unittest.TestCase):
 
         self.assertGreater(first, 0)
         self.assertEqual(first, second)
+
+
+from context_builder import SummaryError, ensure_summary
+
+
+class FakeModel:
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = 0
+
+    def invoke(self, messages):
+        self.calls += 1
+        if not self.replies:
+            raise RuntimeError("没有更多回复")
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return AIMessage(content=reply)
+
+
+def big_session(count=30, size=400):
+    messages = []
+    for index in range(count):
+        factory = HumanMessage if index % 2 == 0 else AIMessage
+        messages.append(factory(content="内容" * size))
+    session_obj = SimpleNamespace(
+        messages=messages,
+        summary="",
+        summary_upto=0,
+        summary_count=0,
+        summary_updated_at="",
+    )
+    return session_obj
+
+
+def local_profile(window=16384):
+    return SimpleNamespace(context_window=window, supports_vision=False, key="local", provider="ollama")
+
+
+def cloud_profile():
+    return SimpleNamespace(context_window=128000, supports_vision=False, key="deepseek", provider="deepseek")
+
+
+class SummaryMaintenanceTests(unittest.TestCase):
+    def test_short_history_is_not_summarized(self):
+        session_obj = big_session(count=4)
+        model = FakeModel(["摘要"])
+
+        changed = ensure_summary(
+            session_obj, cloud_profile(), local_profile(), "系统", 0,
+            lambda key: model, lambda session: None,
+        )
+
+        self.assertFalse(changed)
+        self.assertEqual(model.calls, 0)
+
+    def test_summary_advances_to_a_turn_boundary_and_keeps_two_turns(self):
+        session_obj = big_session()
+        model = FakeModel(["摘要"] * 5)
+
+        changed = ensure_summary(
+            session_obj, cloud_profile(), local_profile(), "系统", 0,
+            lambda key: model, lambda session: None,
+        )
+
+        self.assertTrue(changed)
+        self.assertGreater(session_obj.summary_upto, 0)
+        self.assertEqual(session_obj.summary_upto % 2, 0)
+        self.assertGreaterEqual(len(session_obj.messages) - session_obj.summary_upto, 4)
+
+    def test_large_gap_is_chunked_and_merged(self):
+        session_obj = big_session(count=40, size=900)
+        model = FakeModel(["第一段", "第二段", "第三段"])
+
+        changed = ensure_summary(
+            session_obj, cloud_profile(), local_profile(), "系统", 0,
+            lambda key: model, lambda session: None,
+        )
+
+        self.assertTrue(changed)
+        self.assertGreaterEqual(model.calls, 2)
+        self.assertIn("第一段", session_obj.summary)
+
+    def test_summary_is_capped(self):
+        session_obj = big_session()
+        model = FakeModel(["长" * 100000] * 5)
+
+        ensure_summary(
+            session_obj, cloud_profile(), local_profile(), "系统", 0,
+            lambda key: model, lambda session: None,
+        )
+
+        self.assertLessEqual(
+            estimate_text_tokens(session_obj.summary),
+            2000 + estimate_text_tokens("…[摘要已截断]"),
+        )
+
+    def test_failure_raises_and_keeps_previous_summary(self):
+        session_obj = big_session()
+        session_obj.summary = "旧摘要"
+
+        with self.assertRaises(SummaryError):
+            ensure_summary(
+                session_obj, cloud_profile(), local_profile(), "系统", 0,
+                lambda key: FakeModel([RuntimeError("模型不可用")]),
+                lambda session: None,
+            )
+
+        self.assertEqual(session_obj.summary, "旧摘要")
+        self.assertEqual(session_obj.summary_upto, 0)
+
+    def test_force_ignores_the_threshold(self):
+        session_obj = big_session(count=10)
+        model = FakeModel(["手动摘要"])
+
+        changed = ensure_summary(
+            session_obj, cloud_profile(), local_profile(), "系统", 0,
+            lambda key: model, lambda session: None, force=True,
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(model.calls, 1)
+        self.assertGreater(session_obj.summary_upto, 0)

@@ -308,3 +308,133 @@ def build_view(
         fits=view_tokens <= profile.context_window,
     )
     return view, stats
+
+
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _turn_starts(messages: Sequence[BaseMessage]) -> list[int]:
+    starts = [0]
+    for index, message in enumerate(messages):
+        if index > 0 and isinstance(message, HumanMessage):
+            starts.append(index)
+    return starts
+
+
+def _summary_prompt(previous: str, chunk: Sequence[BaseMessage], summary_cap: int) -> str:
+    lines: list[str] = []
+    for message in chunk:
+        role = {"human": "用户", "ai": "助手", "tool": "工具"}.get(
+            getattr(message, "type", ""), "消息"
+        )
+        text = _content_text(getattr(message, "content", "")).strip()
+        if text:
+            lines.append(f"{role}: {text}")
+    transcript = "\n".join(lines)
+    return (
+        "请把下面这段新增对话合并进已有摘要，输出一份简洁的中文摘要。\n"
+        "保留关键事实、结论、涉及的文件路径和未完成事项；不要编造内容。\n"
+        f"摘要控制在约 {max(200, summary_cap)} 个汉字以内。\n\n"
+        f"已有摘要：\n{previous or '（无）'}\n\n"
+        f"新增对话：\n{transcript}"
+    )
+
+
+def ensure_summary(
+    session,
+    active_profile,
+    target_profile,
+    system_prompt: str,
+    tool_tokens: int,
+    build_model: Callable,
+    save_session: Callable,
+    force: bool = False,
+) -> bool:
+    """Summarize older turns into ``session.summary`` without deleting messages.
+
+    ``target_profile`` is the small model the summary must be ready for; the
+    summary is generated with ``active_profile`` (the cloud model).
+    """
+    messages = list(getattr(session, "messages", []) or [])
+    system_tokens = estimate_text_tokens(system_prompt) + MESSAGE_OVERHEAD
+    budget = compute_budget(target_profile.context_window, system_tokens, tool_tokens)
+    tail_target = budget["tail_target"]
+    summary_cap = budget["summary_cap"]
+
+    start = int(getattr(session, "summary_upto", 0) or 0)
+    if start < 0 or start > len(messages):
+        start = 0
+    if len(messages) - start <= MIN_KEEP_TURNS:
+        return False
+
+    starts = _turn_starts(messages)
+    turn_count = len(starts) if messages else 0
+    keep = min(MIN_KEEP_TURNS, turn_count)
+    cutoff: int | None = None
+    if force:
+        cutoff = starts[turn_count - keep] if turn_count > keep else starts[0]
+    else:
+        if estimate_tokens(messages[start:]) <= tail_target:
+            return False
+        for boundary in starts:
+            if boundary < start:
+                continue
+            if estimate_tokens(messages[boundary:]) <= tail_target:
+                cutoff = boundary
+                break
+        if cutoff is None:
+            cutoff = starts[turn_count - keep] if turn_count > keep else starts[0]
+    cutoff = max(start, min(cutoff, len(messages)))
+    gap = messages[start:cutoff]
+    if not gap:
+        return False
+
+    chunks: list[list[BaseMessage]] = []
+    current: list[BaseMessage] = []
+    current_tokens = 0
+    for message in gap:
+        cost = estimate_tokens([message])
+        if current and current_tokens + cost > MAX_SUMMARY_CHUNK_TOKENS:
+            chunks.append(current)
+            current = []
+            current_tokens = 0
+        current.append(message)
+        current_tokens += cost
+    if current:
+        chunks.append(current)
+
+    summary = getattr(session, "summary", "") or ""
+    covered = start
+    calls = 0
+    for chunk in chunks:
+        if calls >= MAX_SUMMARY_CALLS:
+            break
+        try:
+            response = build_model(active_profile.key).invoke(
+                [HumanMessage(content=_summary_prompt(summary, chunk, summary_cap))]
+            )
+        except Exception as exc:  # noqa: BLE001
+            if covered > start:
+                session.summary = summary
+                session.summary_upto = covered
+                session.summary_count = covered
+                session.summary_updated_at = _now_iso()
+                save_session(session)
+            raise SummaryError(str(exc)) from exc
+        text = _content_text(getattr(response, "content", "")).strip()
+        if not text:
+            raise SummaryError("模型返回了空摘要")
+        combined = f"{summary}\n{text}".strip() if summary else text
+        summary = truncate_to_tokens(combined, summary_cap, SUMMARY_TRUNCATE_MARKER)
+        covered += len(chunk)
+        calls += 1
+    if covered == start:
+        return False
+
+    session.summary = summary
+    session.summary_upto = covered
+    session.summary_count = covered
+    session.summary_updated_at = _now_iso()
+    save_session(session)
+    return True
