@@ -213,6 +213,20 @@ def _probe_local(base_url: str) -> tuple[bool, str]:
     return ok, reason
 
 
+def _probe_cloud(base_url: str) -> tuple[bool, str]:
+    """Check TCP reachability of a cloud endpoint without sending credentials."""
+    parsed = urlparse(base_url)
+    host = parsed.hostname
+    if not host:
+        return False, "无效的模型地址"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=2.0):
+            return True, ""
+    except OSError as exc:  # noqa: BLE001
+        return False, f"无法连接 {host}:{port}（{exc}）"
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     """严格解析布尔值：字符串 "false"/"0" 不能被当成 True。"""
     if isinstance(value, bool):
@@ -1025,6 +1039,20 @@ def create_app(
                 item["reason"] = reason or f"未配置 {profile.key_env}"
             items.append(item)
         return {"models": items}
+
+    @app.get("/api/models/{key}/health", dependencies=[Depends(require_token)])
+    def model_health(key: str) -> dict:
+        try:
+            profile = get_profile(key)
+        except ModelConfigError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if profile.provider == "ollama":
+            reachable, reason = _probe_local(profile.base_url)
+        elif not profile.api_key:
+            reachable, reason = False, "未配置 API Key"
+        else:
+            reachable, reason = _probe_cloud(profile.base_url)
+        return {"key": profile.key, "reachable": reachable, "reason": reason}
 
     @app.get("/api/agents", dependencies=[Depends(require_token)])
     def agents(session_id: str | None = None) -> dict:
