@@ -10,7 +10,7 @@ windows:
 
 | Key | Provider | Runtime window |
 | --- | --- | --- |
-| `local` | Ollama `qwen3.5:2b` | 4096 today, 8192 after this change |
+| `local` | Ollama `qwen3.5:2b` | 4096 today, 16384 after this change |
 | `deepseek` | DeepSeek API | 128000 |
 | `qwen` | DashScope API | 262144 |
 
@@ -35,7 +35,11 @@ User decisions:
 
 - Automatic fallback to the local model on network-class failures.
 - The full transcript is always preserved. Compaction becomes a derived view.
-- Local runtime window: 8192.
+- Local runtime window: 16384, with a core tool subset (no Office, subagent,
+  or MCP tools). Measured data forced this choice: the 19 built-in tool schemas
+  total 6265 characters (roughly 5-6k tokens), and the local 2B model prefills
+  at about 45 tokens per second on this CPU. With 8192 tokens the tool and
+  system overhead alone exceeds the window.
 - When the network returns, show a button to switch back; do not switch
   automatically.
 - Maintain a rolling summary while online (approach B), so a fallback never
@@ -59,7 +63,11 @@ model name.
 5. Surface fallback and recovery in the UI without a full page reload.
 6. Use a CJK-aware token estimate and expose authoritative context statistics
    from the backend instead of duplicating estimates in the frontend.
-7. Run the local model with an 8192-token runtime window in development.
+7. Run the local model with a 16384-token runtime window in development.
+8. Give local runs a core tool subset: `get_current_time`, `read_file`,
+   `write_file`, `edit_file`, `web_search`, `web_fetch`, `download_file`,
+   `read_csv`, `read_json`, `read_pdf`. The schema is about 3.2k characters.
+   Local runs do not load Office, subagent, or MCP tools.
 
 ## Non-Goals
 
@@ -69,8 +77,10 @@ model name.
   a safety margin is enough for budgeting.
 - Changing cloud model configuration, prices, or provider selection.
 - Image downscaling or OCR. Images are either counted or replaced by text.
-- Per-model tool selection. The same tool list is used; its schema size is
-  reserved from the budget.
+- Rewriting tool descriptions. The local core subset is selected by tool name;
+  the existing descriptions stay unchanged.
+- Giving local runs the Office, subagent, or MCP tools. Those require a larger
+  prompt than the local model can serve at acceptable speed.
 - Rebuilding, packaging, or installing the desktop application.
 - Changing the installed application's Ollama model or server-wide Ollama
   environment variables.
@@ -172,10 +182,24 @@ max_message      = max(512, int(conversation * 0.40))
 
 Tool schema tokens are measured once per tool-name tuple by serializing the
 OpenAI tool schemas and running the same estimator. The measurement is cached
-in-process. The measured set is the one a run would use: built-in tools, the
-subagent tools for the current manager, and enabled MCP tools. If MCP tools
-cannot be built, measure without them and use the 2000-token fallback if the
-measurement itself fails.
+in-process. The measured set is the one a run would use:
+
+- Local (`provider == "ollama"`): the ten core tools only, about 3.2k
+  characters of schema. No subagent or MCP tools.
+- Cloud: all built-in tools, the subagent tools for the current manager, and
+  enabled MCP tools.
+- If MCP tools cannot be built, measure without them and use the 2000-token
+  fallback if the measurement itself fails.
+
+With the core subset at a 16384 window, the conversation budget is roughly:
+
+```
+16384 - 620 (system) - 3200 (tools) - 2457 (output) - 1638 (margin) ≈ 8469
+```
+
+The actual view can be smaller; the budget is an upper bound. Prefill speed is
+about 45 tokens/second on this CPU, so a full view still costs several minutes.
+Offline turns are expected to be slow.
 
 ## View Construction
 
@@ -343,9 +367,9 @@ No automatic switch back.
   "summary_upto": 12,
   "context": {
     "raw_tokens": 31000,
-    "view_tokens": 7400,
-    "window": 8192,
-    "tool_tokens": 1800,
+    "view_tokens": 9800,
+    "window": 16384,
+    "tool_tokens": 3200,
     "system_tokens": 620,
     "summary_tokens": 900,
     "recent_turns": 2,
@@ -384,9 +408,10 @@ SSE changes:
   turn, when the server returns fresh statistics; there is no client-side
   estimate.
 - The context success line reads, for example:
-  `上下文 ≈ 7.4k / 8.2k · 原始历史 31k · 已摘要 12 条`.
+  `上下文 ≈ 9.8k / 16.4k · 原始历史 31k · 已摘要 12 条`.
 - A banner component renders fallback and recovery states:
-  - Fallback: "网络不可用，已自动切换到本地模型。上下文已压缩至 7.4k tokens。"
+  - Fallback: "网络不可用，已自动切换到本地模型。上下文已压缩至 9.8k tokens。"
+  - Local mode also shows "本地模型只启用核心工具（无 Office / 子 agent / MCP）".
   - Recovery available: the banner gains the switch-back button.
 - `App` handles `model_fallback` by clearing the current streaming assistant
   text and tool cards for that run before applying subsequent tokens.
@@ -408,25 +433,25 @@ Development setup:
 
    ```text
    FROM qwen3.5:2b
-   PARAMETER num_ctx 8192
+   PARAMETER num_ctx 16384
    ```
 
    ```bash
-   ollama create qwen3.5:2b-8k -f Modelfile.qwen35-8k
+   ollama create qwen3.5:2b-16k -f Modelfile.qwen35-16k
    ```
 
 2. In the development `.env`:
 
    ```text
-   OLLAMA_MODEL=qwen3.5:2b-8k
-   OLLAMA_CONTEXT_WINDOW=8192
+   OLLAMA_MODEL=qwen3.5:2b-16k
+   OLLAMA_CONTEXT_WINDOW=16384
    ```
 
 3. Verify with one request followed by `ollama ps`; the CONTEXT column must
-   read 8192.
+   read 16384.
 
 If the derived model still loads at 4096, the local provider must call
-Ollama's native `/api/chat` with `options.num_ctx = 8192` instead of the
+Ollama's native `/api/chat` with `options.num_ctx = 16384` instead of the
 OpenAI-compatible endpoint. The budget logic is unchanged; only the local
 client changes. Do not use the server-wide `OLLAMA_CONTEXT_LENGTH` variable,
 because it would also affect the installed application.
@@ -434,9 +459,15 @@ because it would also affect the installed application.
 The installed application keeps `qwen3.5:2b` and 4096. Do not change
 server-wide Ollama environment variables.
 
-The extra KV cache at 8192 is roughly 0.9 GB on this machine (16 GB total).
-Summaries and view trimming still apply at this size; 8192 is not treated as a
-large window.
+At 16384 the model plus KV cache is roughly 8 GB; the machine has 16 GB.
+Close other memory-heavy applications before relying on local fallback.
+
+Measured prefill on this machine: a 3265-token prompt took 73 seconds, about
+45 tokens per second. A full local view with core tools is roughly 7-10k
+tokens, so an offline turn can take two to four minutes before generation
+starts. This is expected and is not a reason to enlarge the window further;
+16384 is still a small window relative to the cloud models, and the view
+trimming rules still apply.
 
 ## Error Handling and Edge Cases
 
@@ -521,15 +552,16 @@ No packaging or installer rebuild is part of testing.
 1. Session fields and store migrations.
 2. `context_builder.py` with estimator, budget, view builder, and summary
    maintenance.
-3. Replace the run-time message assembly in `desktop_api.py`.
-4. Fallback classifier and retry orchestration.
-5. New and changed API endpoints and SSE events.
-6. Frontend types, context display, fallback banner, and recovery polling.
-7. Development `.env` and derived Ollama model for 8192.
-8. Tests and manual verification.
+3. Core tool subset and tool token measurement.
+4. Replace the run-time message assembly in `desktop_api.py`.
+5. Fallback classifier and retry orchestration.
+6. New and changed API endpoints and SSE events.
+7. Frontend types, context display, fallback banner, and recovery polling.
+8. Development `.env` and derived Ollama model for 16384.
+9. Tests and manual verification.
 
 ## Rollback
 
 All changes are in the development tree. Reverting the branch restores the
-previous behavior. The derived `qwen3.5:2b-8k` model can be removed with
-`ollama rm qwen3.5:2b-8k`; the installed application does not reference it.
+previous behavior. The derived `qwen3.5:2b-16k` model can be removed with
+`ollama rm qwen3.5:2b-16k`; the installed application does not reference it.
