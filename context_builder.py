@@ -133,3 +133,178 @@ def compute_budget(window: int, system_tokens: int, tool_tokens: int) -> dict:
         "tail_target": int(conversation * 0.75),
         "max_message": max(512, int(conversation * 0.40)),
     }
+
+
+@dataclass(frozen=True)
+class ContextStats:
+    raw_tokens: int
+    view_tokens: int
+    window: int
+    tool_tokens: int
+    system_tokens: int
+    summary_tokens: int
+    recent_turns: int
+    dropped_turns: int
+    images_dropped: int
+    fits: bool
+
+    def as_dict(self) -> dict:
+        return {
+            "raw_tokens": self.raw_tokens,
+            "view_tokens": self.view_tokens,
+            "window": self.window,
+            "tool_tokens": self.tool_tokens,
+            "system_tokens": self.system_tokens,
+            "summary_tokens": self.summary_tokens,
+            "recent_turns": self.recent_turns,
+            "dropped_turns": self.dropped_turns,
+            "images_dropped": self.images_dropped,
+            "fits": self.fits,
+        }
+
+
+def split_turns(messages: Sequence[BaseMessage]) -> list[list[BaseMessage]]:
+    turns: list[list[BaseMessage]] = []
+    for message in messages:
+        if isinstance(message, HumanMessage) and turns:
+            turns.append([message])
+        elif not turns:
+            turns.append([message])
+        else:
+            turns[-1].append(message)
+    return turns
+
+
+def _copy_message(message: BaseMessage, content) -> BaseMessage:
+    if hasattr(message, "model_copy"):
+        return message.model_copy(update={"content": content})
+    return message.copy(update={"content": content})
+
+
+def _replace_images(message: BaseMessage) -> tuple[BaseMessage, int]:
+    content = getattr(message, "content", "")
+    if not isinstance(content, list):
+        return message, 0
+    parts: list = []
+    dropped = 0
+    for part in content:
+        if isinstance(part, dict) and part.get("type") in {"image_url", "image_ref"}:
+            parts.append({"type": "text", "text": "[图片已省略]"})
+            dropped += 1
+        else:
+            parts.append(part)
+    if not dropped:
+        return message, 0
+    return _copy_message(message, parts), dropped
+
+
+def _truncate_message(message: BaseMessage, max_tokens: int) -> BaseMessage:
+    content = getattr(message, "content", "")
+    if isinstance(content, list):
+        remaining = max_tokens
+        parts: list = []
+        changed = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = str(part.get("text", ""))
+                cut = truncate_to_tokens(text, remaining)
+                if cut != text:
+                    changed = True
+                parts.append({**part, "text": cut})
+                remaining = max(0, remaining - estimate_text_tokens(cut))
+            else:
+                parts.append(part)
+        return _copy_message(message, parts) if changed else message
+    text = str(content)
+    cut = truncate_to_tokens(text, max_tokens)
+    return _copy_message(message, cut) if cut != text else message
+
+
+def measure_tool_tokens(tools: Iterable) -> int:
+    tools = list(tools)
+    key = tuple(sorted(getattr(tool, "name", "") for tool in tools))
+    cached = _tool_token_cache.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+
+        payload = [convert_to_openai_tool(tool) for tool in tools]
+        value = estimate_text_tokens(json.dumps(payload, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        value = 2000
+    _tool_token_cache[key] = value
+    return value
+
+
+def build_view(
+    session,
+    profile,
+    system_prompt: str,
+    tool_tokens: int,
+    hydrate: Callable[[list[BaseMessage]], list[BaseMessage]] | None = None,
+) -> tuple[list[BaseMessage], ContextStats]:
+    messages = list(getattr(session, "messages", []) or [])
+    system_tokens = estimate_text_tokens(system_prompt) + MESSAGE_OVERHEAD
+    budget = compute_budget(profile.context_window, system_tokens, tool_tokens)
+    raw_tokens = estimate_tokens(messages)
+
+    summary_text = truncate_to_tokens(
+        getattr(session, "summary", "") or "",
+        budget["summary_cap"],
+        SUMMARY_TRUNCATE_MARKER,
+    )
+    summary_message = (
+        SystemMessage(content=f"{SUMMARY_PREFIX}\n{summary_text}")
+        if summary_text
+        else None
+    )
+    summary_tokens = estimate_tokens([summary_message]) if summary_message else 0
+
+    remaining = budget["conversation"] - summary_tokens
+    turns = split_turns(messages)
+    selected: list[list[BaseMessage]] = []
+    images_dropped = 0
+    for turn in reversed(turns):
+        prepared = []
+        for message in turn:
+            if not profile.supports_vision:
+                message, dropped = _replace_images(message)
+                images_dropped += dropped
+            prepared.append(message)
+        cost = estimate_tokens(prepared)
+        if cost > remaining:
+            break
+        selected.insert(0, prepared)
+        remaining -= cost
+    if not selected and turns:
+        prepared = []
+        for message in turns[-1]:
+            if not profile.supports_vision:
+                message, dropped = _replace_images(message)
+                images_dropped += dropped
+            prepared.append(_truncate_message(message, budget["max_message"]))
+        selected = [prepared]
+
+    view: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+    if summary_message is not None:
+        view.append(summary_message)
+    for turn in selected:
+        view.extend(turn)
+    view = sanitize_messages(view)
+    if profile.supports_vision and hydrate is not None:
+        view = hydrate(view)
+    view_tokens = estimate_tokens(view)
+    stats = ContextStats(
+        raw_tokens=raw_tokens,
+        view_tokens=view_tokens,
+        window=profile.context_window,
+        tool_tokens=tool_tokens,
+        system_tokens=system_tokens,
+        summary_tokens=summary_tokens,
+        recent_turns=len(selected),
+        dropped_turns=max(0, len(turns) - len(selected)),
+        images_dropped=images_dropped,
+        fits=view_tokens <= profile.context_window,
+    )
+    return view, stats

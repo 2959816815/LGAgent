@@ -73,3 +73,132 @@ class TruncateTests(unittest.TestCase):
 
     def test_short_text_is_unchanged(self):
         self.assertEqual(truncate_to_tokens("短文本", 100), "短文本")
+
+
+from types import SimpleNamespace
+
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+
+from context_builder import SUMMARY_PREFIX, build_view, measure_tool_tokens, split_turns
+
+
+def profile(window=16384, vision=False):
+    return SimpleNamespace(context_window=window, supports_vision=vision)
+
+
+def session(messages, summary=""):
+    return SimpleNamespace(messages=messages, summary=summary, summary_upto=0)
+
+
+class ViewTests(unittest.TestCase):
+    def test_view_keeps_the_newest_turn_and_drops_whole_old_turns(self):
+        messages = []
+        for index in range(40):
+            factory = HumanMessage if index % 2 == 0 else AIMessage
+            messages.append(factory(content="内容" * 400))
+
+        view, stats = build_view(session(messages), profile(), "系统" * 100, 0)
+
+        self.assertGreater(stats.dropped_turns, 0)
+        self.assertLessEqual(stats.view_tokens, 16384)
+        self.assertIsInstance(view[0], SystemMessage)
+        self.assertIsInstance(view[-1], AIMessage)
+
+    def test_tool_call_and_result_stay_together(self):
+        messages = [
+            HumanMessage(content="读文件"),
+            AIMessage(
+                content="",
+                tool_calls=[{"id": "call-1", "name": "read_file", "args": {}}],
+            ),
+            ToolMessage(content="内容", tool_call_id="call-1", name="read_file"),
+            AIMessage(content="完成"),
+        ]
+
+        view, _ = build_view(session(messages), profile(), "系统", 0)
+
+        tool_index = next(
+            index for index, message in enumerate(view) if isinstance(message, ToolMessage)
+        )
+        self.assertIsInstance(view[tool_index - 1], AIMessage)
+        self.assertTrue(view[tool_index - 1].tool_calls)
+
+    def test_summary_is_injected_and_capped(self):
+        view, stats = build_view(
+            session([HumanMessage(content="问题")], summary="摘要" * 5000),
+            profile(window=4096),
+            "系统",
+            0,
+        )
+
+        self.assertIn(SUMMARY_PREFIX, str(view[1].content))
+        self.assertGreater(stats.summary_tokens, 0)
+        self.assertLessEqual(stats.summary_tokens, stats.window)
+
+    def test_images_are_replaced_for_non_vision_models(self):
+        messages = [
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": "看图"},
+                    {"type": "image_ref", "attachment_id": "a1"},
+                ]
+            )
+        ]
+
+        view, stats = build_view(session(messages), profile(vision=False), "系统", 0)
+
+        self.assertEqual(stats.images_dropped, 1)
+        self.assertIn("[图片已省略]", str(view[-1].content))
+
+    def test_images_are_kept_for_vision_models(self):
+        messages = [
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": "看图"},
+                    {"type": "image_ref", "attachment_id": "a1"},
+                ]
+            )
+        ]
+
+        view, stats = build_view(
+            session(messages), profile(vision=True), "系统", 0,
+            hydrate=lambda items: items,
+        )
+
+        self.assertEqual(stats.images_dropped, 0)
+        self.assertIsInstance(view[-1].content, list)
+
+    def test_oversized_newest_turn_is_truncated(self):
+        messages = [HumanMessage(content="字" * 100000)]
+
+        view, stats = build_view(session(messages), profile(), "系统", 0)
+
+        self.assertIn("内容过长已截断", str(view[-1].content))
+        self.assertLessEqual(stats.view_tokens, 16384)
+
+    def test_split_turns_starts_a_new_turn_at_each_human_message(self):
+        turns = split_turns(
+            [
+                HumanMessage(content="a"),
+                AIMessage(content="b"),
+                HumanMessage(content="c"),
+                AIMessage(content="d"),
+            ]
+        )
+
+        self.assertEqual(len(turns), 2)
+        self.assertEqual(len(turns[0]), 2)
+
+
+class ToolTokenTests(unittest.TestCase):
+    def test_schema_size_is_measured_and_cached(self):
+        class FakeTool:
+            name = "fake"
+            description = "说明" * 50
+            args = {}
+
+        first = measure_tool_tokens([FakeTool()])
+        second = measure_tool_tokens([FakeTool()])
+
+        self.assertGreater(first, 0)
+        self.assertEqual(first, second)
