@@ -18,7 +18,9 @@ from model_registry import (
 
 class ModelRegistryTests(unittest.TestCase):
     def test_three_profiles_have_expected_defaults(self):
-        profiles = {profile.key: profile for profile in list_profiles()}
+        # 测试内置默认值，不依赖开发者 .env 里的 OLLAMA_MODEL 等覆盖项。
+        with patch.dict(os.environ, {}, clear=True):
+            profiles = {profile.key: profile for profile in list_profiles()}
         self.assertEqual(list(profiles), ["local", "deepseek", "qwen"])
         self.assertEqual(profiles["local"].model, "qwen3.5:2b")
         self.assertEqual(profiles["local"].provider, "ollama")
