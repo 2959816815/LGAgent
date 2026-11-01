@@ -1,9 +1,11 @@
 import type {
   AgentRecord,
   Attachment,
+  ContextStats,
   FileEntry,
   McpCatalogItem,
   McpServerStatus,
+  ModelHealth,
   ModelInfo,
   SessionDetail,
   SessionMeta,
@@ -99,11 +101,15 @@ export async function renameSession(
 export async function patchSessionModel(
   id: string,
   modelKey: string,
-): Promise<{ model_key: string; label: string }> {
+): Promise<{ model_key: string; label: string; context?: ContextStats }> {
   return request(`/api/sessions/${id}/model`, {
     method: "PATCH",
     body: JSON.stringify({ model_key: modelKey }),
   });
+}
+
+export async function getModelHealth(key: string): Promise<ModelHealth> {
+  return request<ModelHealth>(`/api/models/${encodeURIComponent(key)}/health`);
 }
 
 export async function listModels(): Promise<ModelInfo[]> {

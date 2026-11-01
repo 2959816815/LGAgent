@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
 import { searchFiles } from "../api";
-import { copyText, estimateContext, formatCount, lastAssistantIndex } from "../helpers";
+import { copyText, formatCount, lastAssistantIndex } from "../helpers";
 import { markdownToHtml } from "../markdown";
 import type {
   ApprovalRequest,
@@ -180,9 +180,9 @@ export function Chat(props: {
           )}
           <div className="chat-subtitle">
             {props.session.message_count} 条消息 · {model?.label ?? props.session.model_key}
-            {model?.context_window
-              ? ` · 上下文 ≈ ${formatCount(estimateContext(props.messages))} / ${formatCount(
-                  model.context_window,
+            {props.session.context && props.session.context.window
+              ? ` · 上下文 ≈ ${formatCount(props.session.context.view_tokens)} / ${formatCount(
+                  props.session.context.window,
                 )} tokens`
               : ""}
           </div>
@@ -201,7 +201,9 @@ export function Chat(props: {
       <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
         {session.summary && (
           <details className="compacted-summary">
-            <summary>已压缩 {session.summary_count ?? 0} 条早期消息</summary>
+            <summary>
+              已摘要 {session.summary_upto ?? session.summary_count ?? 0} 条早期消息（原文仍保留）
+            </summary>
             <pre className="compacted-summary-text">{session.summary}</pre>
           </details>
         )}

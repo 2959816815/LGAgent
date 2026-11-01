@@ -51,15 +51,6 @@ export function formatCount(value: number): string {
   return String(Math.max(0, Math.round(value)));
 }
 
-export function estimateContext(messages: Message[]): number {
-  const chars = messages.reduce(
-    (sum, message) =>
-      sum + message.content.length + (message.attachments?.length ?? 0) * 4_000,
-    0,
-  );
-  return Math.round(chars / 4);
-}
-
 /** 复制文本到剪贴板；优先用异步 API，失败时退回 textarea + execCommand。 */
 export async function copyText(text: string): Promise<boolean> {
   if (!text) return false;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { listFiles, searchFiles } from "../api";
-import { errorText, estimateContext, formatCount, statusLabel, timeLabel } from "../helpers";
+import { errorText, formatCount, statusLabel, timeLabel } from "../helpers";
 import type {
   AgentRecord,
   FileEntry,
@@ -213,15 +213,10 @@ export function RightPanel(props: {
 }) {
   const [tab, setTab] = useState<"tasks" | "tools" | "context" | "files" | "mcp">("tasks");
   const running = props.agents.filter((agent) => agent.status === "running").length;
-  const windowSize = props.model?.context_window ?? 0;
-  const used = estimateContext(props.messages);
+  const context = props.session?.context;
+  const windowSize = context?.window ?? props.model?.context_window ?? 0;
+  const used = context?.view_tokens ?? 0;
   const percent = windowSize > 0 ? Math.min(100, (used / windowSize) * 100) : 0;
-  const messageTokens = (role: Message["role"]) =>
-    estimateContext(props.messages.filter((message) => message.role === role));
-  const attachmentCount = props.messages.reduce(
-    (sum, message) => sum + (message.attachments?.length ?? 0),
-    0,
-  );
   return (
     <aside className="right-panel">
       <div className="tabs">
@@ -312,38 +307,22 @@ export function RightPanel(props: {
             </>
           )}
 
-          <div className="context-breakdown">
-            {(["user", "assistant", "tool"] as const).map((role) => {
-              const value = messageTokens(role);
-              const label = role === "user" ? "用户消息" : role === "assistant" ? "助手回复" : "工具结果";
-              return (
-                <div key={role} className="context-row">
-                  <span>{label}</span>
-                  <div className="context-row-bar">
-                    <i style={{ width: `${used ? Math.min(100, (value / used) * 100) : 0}%` }} />
-                  </div>
-                  <b>{formatCount(value)}</b>
-                </div>
-              );
-            })}
-          </div>
-
           <div className="context-stats">
             <div>
-              <b>{props.session?.message_count ?? 0}</b>
-              <span>消息</span>
+              <b>{formatCount(context?.raw_tokens ?? 0)}</b>
+              <span>原始历史</span>
             </div>
             <div>
-              <b>{props.tools.length}</b>
-              <span>工具调用</span>
+              <b>{props.session?.summary_upto ?? 0}</b>
+              <span>已摘要条数</span>
             </div>
             <div>
-              <b>{attachmentCount}</b>
-              <span>图片</span>
+              <b>{context?.dropped_turns ?? 0}</b>
+              <span>裁剪轮次</span>
             </div>
             <div>
-              <b>{props.agents.length}</b>
-              <span>子 agent</span>
+              <b>{context?.images_dropped ?? 0}</b>
+              <span>省略图片</span>
             </div>
           </div>
 
@@ -353,11 +332,11 @@ export function RightPanel(props: {
             disabled={props.compacting || props.messages.length === 0}
             onClick={props.onCompact}
           >
-            {props.compacting ? "正在压缩…" : "立即压缩上下文"}
+            {props.compacting ? "正在更新…" : "更新摘要"}
           </button>
 
           <div className="context-note">
-            上下文按“字符数 ÷ 4”估算，不含系统提示词；精确 token 以模型服务商为准。
+            上下文由后端按当前模型窗口统计；较早消息仍保留在历史中，只影响发给模型的内容。
           </div>
         </div>
       )}

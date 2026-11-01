@@ -40,6 +40,27 @@ export interface SessionDetail extends SessionMeta {
   next_before?: number | null;
   summary?: string;
   summary_count?: number;
+  summary_upto?: number;
+  context?: ContextStats;
+}
+
+export interface ContextStats {
+  raw_tokens: number;
+  view_tokens: number;
+  window: number;
+  tool_tokens: number;
+  system_tokens: number;
+  summary_tokens: number;
+  recent_turns: number;
+  dropped_turns: number;
+  images_dropped: number;
+  fits: boolean;
+}
+
+export interface ModelHealth {
+  key: string;
+  reachable: boolean;
+  reason?: string;
 }
 
 export interface AgentRecord {
