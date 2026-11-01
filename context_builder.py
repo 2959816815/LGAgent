@@ -248,6 +248,11 @@ def build_view(
     system_tokens = estimate_text_tokens(system_prompt) + MESSAGE_OVERHEAD
     budget = compute_budget(profile.context_window, system_tokens, tool_tokens)
     raw_tokens = estimate_tokens(messages)
+    # 摘要已经覆盖的消息不再原样发给模型，避免摘要与原文重复占用窗口。
+    coverage = int(getattr(session, "summary_upto", 0) or 0)
+    if coverage < 0 or coverage >= len(messages):
+        coverage = 0
+    uncovered = messages[coverage:]
 
     summary_text = truncate_to_tokens(
         getattr(session, "summary", "") or "",
@@ -262,7 +267,7 @@ def build_view(
     summary_tokens = estimate_tokens([summary_message]) if summary_message else 0
 
     remaining = budget["conversation"] - summary_tokens
-    turns = split_turns(messages)
+    turns = split_turns(uncovered)
     selected: list[list[BaseMessage]] = []
     images_dropped = 0
     for turn in reversed(turns):

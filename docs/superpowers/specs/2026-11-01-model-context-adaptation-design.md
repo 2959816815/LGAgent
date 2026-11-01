@@ -210,10 +210,14 @@ returns `(messages, stats)`.
 2. Start with `SystemMessage(system_prompt)`.
 3. If `session.summary` is non-empty, truncate it to `summary_cap`, wrap it as
    `SystemMessage("【较早对话的摘要】\n" + summary)`, and append it.
-4. Walk `session.messages` from newest to oldest in whole turns. A turn begins
-   at a `HumanMessage` and includes all following `AIMessage` and
-   `ToolMessage` entries until the next `HumanMessage`. Include a turn only if
-   it fits the remaining budget. Always include the newest turn.
+4. Walk the uncovered messages, `session.messages[session.summary_upto:]`, from
+   newest to oldest in whole turns. Messages already covered by the summary
+   are never sent again, so the summary and the raw transcript cannot duplicate
+   each other in the view. A turn begins at a `HumanMessage` and includes all
+   following `AIMessage` and `ToolMessage` entries until the next
+   `HumanMessage`. Include a turn only if it fits the remaining budget. Always
+   include the newest turn. If `summary_upto` is out of range, clamp it to 0
+   and use the full history.
 5. If the newest turn alone exceeds the budget, keep its `HumanMessage` and
    truncate each later message in that turn to `max_message` tokens with the
    marker `\n…[内容过长已截断]`.
@@ -237,6 +241,9 @@ returns `(messages, stats)`.
     "fits": view_tokens <= profile.context_window,
 }
 ```
+
+`dropped_turns` counts uncovered turns that did not fit the budget. Turns covered
+by the summary are represented by the summary and are not counted as dropped.
 
 The view is built fresh for every run. It is never persisted.
 

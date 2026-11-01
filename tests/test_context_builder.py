@@ -135,6 +135,22 @@ class ViewTests(unittest.TestCase):
         self.assertGreater(stats.summary_tokens, 0)
         self.assertLessEqual(stats.summary_tokens, stats.window)
 
+    def test_summarized_messages_are_not_sent_again(self):
+        messages = [
+            (HumanMessage if index % 2 == 0 else AIMessage)(content=f"msg-{index}")
+            for index in range(10)
+        ]
+        covered = SimpleNamespace(messages=messages, summary="摘要", summary_upto=8)
+
+        view, stats = build_view(covered, profile(), "系统", 0)
+
+        contents = [str(message.content) for message in view]
+        self.assertFalse(any("msg-0" in text or "msg-6" in text for text in contents))
+        self.assertTrue(any("msg-8" in text for text in contents))
+        self.assertTrue(any("msg-9" in text for text in contents))
+        self.assertEqual(stats.recent_turns, 1)
+        self.assertEqual(stats.dropped_turns, 0)
+
     def test_images_are_replaced_for_non_vision_models(self):
         messages = [
             HumanMessage(
