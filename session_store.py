@@ -49,6 +49,9 @@ class Session:
     summary: str = ""
     # 已经被压缩进摘要的历史消息条数，仅用于界面提示
     summary_count: int = 0
+    # 摘要覆盖到的消息条数：summary 描述 messages[:summary_upto]
+    summary_upto: int = 0
+    summary_updated_at: str = ""
 
 
 @dataclass
@@ -234,6 +237,8 @@ class SessionStore:
             "model_key": session.model_key,
             "summary": session.summary,
             "summary_count": session.summary_count,
+            "summary_upto": session.summary_upto,
+            "summary_updated_at": session.summary_updated_at,
             "messages": messages_to_dict(messages),
         }
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -274,6 +279,13 @@ class SessionStore:
         summary_count = raw.get("summary_count") or 0
         if isinstance(summary_count, bool) or not isinstance(summary_count, int):
             summary_count = 0
+        summary_upto = raw.get("summary_upto") or 0
+        if isinstance(summary_upto, bool) or not isinstance(summary_upto, int):
+            summary_upto = 0
+        summary_upto = max(0, summary_upto)
+        summary_updated_at = raw.get("summary_updated_at") or ""
+        if not isinstance(summary_updated_at, str):
+            summary_updated_at = ""
         return Session(
             session_id,
             title,
@@ -283,6 +295,8 @@ class SessionStore:
             model_key,
             summary=summary,
             summary_count=summary_count,
+            summary_upto=summary_upto,
+            summary_updated_at=summary_updated_at,
         )
 
     def list_sessions(self) -> list[SessionMeta]:

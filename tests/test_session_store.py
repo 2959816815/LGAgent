@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sqlite3
 import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,7 @@ from session_store import (
     SessionStoreError,
     clean_title,
 )
+from session_store_sqlite import SqliteSessionStore
 
 SESSION_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 
@@ -200,6 +202,79 @@ class SessionStoreTests(unittest.TestCase):
 
     def test_clean_title_handles_control_characters(self):
         self.assertEqual(clean_title("  a\n\tb \x00 "), "a b")
+
+
+class SummaryCoverageStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(__file__).resolve().parent.parent / f".test_summary_cover_{uuid.uuid4().hex[:8]}"
+        self.root.mkdir()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+    def test_json_store_roundtrips_summary_coverage(self):
+        store = SessionStore(self.root / ".sessions")
+        session = store.create("覆盖")
+        session.summary = "旧摘要"
+        session.summary_upto = 3
+        session.summary_updated_at = "2026-11-01T00:00:00+08:00"
+        store.save(session)
+
+        loaded = store.load(session.id)
+
+        self.assertEqual(loaded.summary_upto, 3)
+        self.assertEqual(loaded.summary_updated_at, "2026-11-01T00:00:00+08:00")
+        self.assertEqual(loaded.summary_count, 0)
+
+    def test_old_json_session_defaults_coverage_to_zero(self):
+        store = SessionStore(self.root / ".sessions")
+        session = store.create("旧会话")
+        path = self.root / ".sessions" / f"{session.id}.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw.pop("summary_upto", None)
+        raw.pop("summary_updated_at", None)
+        path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+        loaded = store.load(session.id)
+
+        self.assertEqual(loaded.summary_upto, 0)
+        self.assertEqual(loaded.summary_updated_at, "")
+
+    def test_sqlite_store_roundtrips_summary_coverage(self):
+        store = SqliteSessionStore(self.root / "agent.db")
+        session = store.create("覆盖")
+        session.summary = "旧摘要"
+        session.summary_upto = 5
+        session.summary_updated_at = "2026-11-01T00:00:00+08:00"
+        store.save(session)
+
+        loaded = store.load(session.id)
+
+        self.assertEqual(loaded.summary_upto, 5)
+        self.assertEqual(loaded.summary_updated_at, "2026-11-01T00:00:00+08:00")
+
+    def test_sqlite_adds_columns_to_old_database(self):
+        db = self.root / "old.db"
+        connection = sqlite3.connect(db)
+        connection.execute(
+            "CREATE TABLE sessions ("
+            "id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL, model_key TEXT, "
+            "message_count INTEGER NOT NULL DEFAULT 0, "
+            "summary TEXT NOT NULL DEFAULT '', "
+            "summary_count INTEGER NOT NULL DEFAULT 0)"
+        )
+        connection.execute(
+            "INSERT INTO sessions VALUES('20260101-000000-abcd', '旧', "
+            "'2026-01-01T00:00:00+08:00', '2026-01-01T00:00:00+08:00', "
+            "'local', 0, '', 0)"
+        )
+        connection.commit()
+        connection.close()
+
+        store = SqliteSessionStore(db)
+        loaded = store.load("20260101-000000-abcd")
+
+        self.assertEqual(loaded.summary_upto, 0)
+        self.assertEqual(loaded.summary_updated_at, "")
 
 
 if __name__ == "__main__":

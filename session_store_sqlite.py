@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     model_key     TEXT,
     message_count INTEGER NOT NULL DEFAULT 0,
     summary       TEXT NOT NULL DEFAULT '',
-    summary_count INTEGER NOT NULL DEFAULT 0
+    summary_count INTEGER NOT NULL DEFAULT 0,
+    summary_upto  INTEGER NOT NULL DEFAULT 0,
+    summary_updated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -126,6 +128,14 @@ class SqliteSessionStore:
         if "summary_count" not in columns:
             connection.execute(
                 "ALTER TABLE sessions ADD COLUMN summary_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "summary_upto" not in columns:
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN summary_upto INTEGER NOT NULL DEFAULT 0"
+            )
+        if "summary_updated_at" not in columns:
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN summary_updated_at TEXT NOT NULL DEFAULT ''"
             )
 
     def _backfill_search_index(self, connection: sqlite3.Connection) -> None:
@@ -216,13 +226,14 @@ class SqliteSessionStore:
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO sessions(id, title, created_at, updated_at, model_key, "
-                "message_count, summary, summary_count) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+                "message_count, summary, summary_count, summary_upto, summary_updated_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "title=excluded.title, created_at=excluded.created_at, "
                 "updated_at=excluded.updated_at, model_key=excluded.model_key, "
                 "message_count=excluded.message_count, summary=excluded.summary, "
-                "summary_count=excluded.summary_count",
+                "summary_count=excluded.summary_count, summary_upto=excluded.summary_upto, "
+                "summary_updated_at=excluded.summary_updated_at",
                 (
                     session.id,
                     session.title,
@@ -232,6 +243,8 @@ class SqliteSessionStore:
                     len(messages),
                     session.summary,
                     session.summary_count,
+                    session.summary_upto,
+                    session.summary_updated_at,
                 ),
             )
             connection.execute("DELETE FROM messages WHERE session_id = ?", (session.id,))
@@ -293,7 +306,8 @@ class SqliteSessionStore:
         self._validate_id(session_id)
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT id, title, created_at, updated_at, model_key, summary, summary_count "
+                "SELECT id, title, created_at, updated_at, model_key, summary, "
+                "summary_count, summary_upto, summary_updated_at "
                 "FROM sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
@@ -319,6 +333,8 @@ class SqliteSessionStore:
             model_key=row[4],
             summary=row[5] or "",
             summary_count=int(row[6] or 0),
+            summary_upto=int(row[7] or 0),
+            summary_updated_at=row[8] or "",
         )
 
     def list_sessions(self) -> list[SessionMeta]:
