@@ -34,11 +34,18 @@ vi.mock("./api", () => {
     }),
     compactSession: vi.fn(async () => detail),
     cancelRun: vi.fn(),
+    getModelHealth: vi.fn(async () => ({ key: "deepseek", reachable: true })),
   };
 });
 
 import { App } from "./App";
-import { compactSession, getSession, streamMessage } from "./api";
+import {
+  compactSession,
+  getModelHealth,
+  getSession,
+  patchSessionModel,
+  streamMessage,
+} from "./api";
 
 beforeEach(() => {
   window.desktop = {
@@ -81,12 +88,40 @@ describe("App", () => {
     );
   });
 
+  it("shows the fallback banner and switches back", async () => {
+    vi.mocked(streamMessage).mockImplementationOnce(async function* () {
+      yield {
+        event: "model_fallback",
+        data: { from: "deepseek", to: "local", label: "本地 qwen3.5", reason: "连接失败" },
+      };
+      yield { event: "done", data: {} };
+    });
+    vi.mocked(patchSessionModel).mockResolvedValue({
+      model_key: "deepseek",
+      label: "DeepSeek",
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByText("重新生成"));
+
+    expect(await screen.findByText(/已自动切换到本地模型/)).toBeTruthy();
+    const button = await screen.findByText(/网络已恢复/);
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(patchSessionModel).toHaveBeenCalledWith(
+        "20260101-000000-abcd",
+        "deepseek",
+      ),
+    );
+  });
+
   it("compacts the current session from the context tab", async () => {
     vi.stubGlobal("confirm", () => true);
     render(<App />);
 
     fireEvent.click(await screen.findByText("上下文"));
-    fireEvent.click(await screen.findByText("立即压缩上下文"));
+    fireEvent.click(await screen.findByText("更新摘要"));
 
     await waitFor(() =>
       expect(compactSession).toHaveBeenCalledWith("20260101-000000-abcd"),

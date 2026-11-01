@@ -6,6 +6,7 @@ import {
   compactSession,
   createSession,
   deleteSession,
+  getModelHealth,
   getSession,
   initApi,
   listAgents,
@@ -65,6 +66,14 @@ export function App() {
   const [undoing, setUndoing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [compacting, setCompacting] = useState(false);
+  const [fallback, setFallback] = useState<{
+    from: string;
+    to: string;
+    label: string;
+    reason?: string;
+  } | null>(null);
+  const [networkBack, setNetworkBack] = useState(false);
+  const [switchingBack, setSwitchingBack] = useState(false);
   const [earlier, setEarlier] = useState<{ hasMore: boolean; nextBefore: number | null }>({
     hasMore: false,
     nextBefore: null,
@@ -104,6 +113,8 @@ export function App() {
     setEarlier({ hasMore: Boolean(data.has_more), nextBefore: data.next_before ?? null });
     setStreamText("");
     setError("");
+    setFallback(null);
+    setNetworkBack(false);
     setAttachments([]);
     setApproval(null);
     setTools([]);
@@ -140,6 +151,8 @@ export function App() {
     setEarlier({ hasMore: false, nextBefore: null });
     setStreamText("");
     setError("");
+    setFallback(null);
+    setNetworkBack(false);
     setAttachments([]);
     setApproval(null);
     setTools([]);
@@ -303,6 +316,16 @@ export function App() {
           setApproval(event.data as unknown as ApprovalRequest);
         } else if (event.event === "undo_available") {
           setUndoAvailable(true);
+        } else if (event.event === "model_fallback") {
+          setFallback({
+            from: String(event.data.from ?? ""),
+            to: String(event.data.to ?? ""),
+            label: String(event.data.label ?? ""),
+            reason: String(event.data.reason ?? ""),
+          });
+          setNetworkBack(false);
+          setStreamText("");
+          setTools([]);
         } else if (event.event === "error") {
           setError(String(event.data.message ?? "模型调用失败"));
         }
@@ -466,6 +489,37 @@ export function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!fallback) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const health = await getModelHealth(fallback.from);
+        if (!cancelled) setNetworkBack(health.reachable);
+      } catch {
+        // 网络探测失败时保持当前状态
+      }
+    };
+    void check();
+    const timer = window.setInterval(check, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [fallback?.from, fallback?.to]);
+
+  async function switchBack(): Promise<void> {
+    if (!detail || !fallback || streaming) return;
+    setSwitchingBack(true);
+    try {
+      await changeModel(fallback.from);
+      setFallback(null);
+      setNetworkBack(false);
+    } finally {
+      setSwitchingBack(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -509,6 +563,10 @@ export function App() {
         hasEarlier={earlier.hasMore}
         onLoadEarlier={() => void loadEarlier()}
         onAddModel={() => setSettingsOpen(true)}
+        fallback={fallback}
+        networkBack={networkBack}
+        switchingBack={switchingBack}
+        onSwitchBack={() => void switchBack()}
       />
       <RightPanel
         session={detail}

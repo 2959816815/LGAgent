@@ -41,6 +41,10 @@ export function Chat(props: {
   hasEarlier: boolean;
   onLoadEarlier: () => void;
   onAddModel: () => void;
+  fallback?: { from: string; to: string; label: string; reason?: string } | null;
+  networkBack?: boolean;
+  switchingBack?: boolean;
+  onSwitchBack?: () => void;
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -197,6 +201,27 @@ export function Chat(props: {
           {props.streaming ? "生成中" : "就绪"}
         </div>
       </header>
+
+      {props.fallback && (
+        <div className="fallback-banner" role="status">
+          <span>
+            网络不可用，已自动切换到本地模型
+            {props.fallback.label ? `（${props.fallback.label}）` : ""}。
+            本地模型只启用核心工具（无 Office / 子 agent / MCP）。
+          </span>
+          {props.networkBack && (
+            <button
+              type="button"
+              onClick={props.onSwitchBack}
+              disabled={props.switchingBack || props.streaming}
+            >
+              {props.switchingBack
+                ? "切换中…"
+                : `网络已恢复，切回 ${props.fallback.from}`}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
         {session.summary && (

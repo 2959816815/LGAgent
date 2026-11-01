@@ -295,6 +295,10 @@ button {
   background: #0f1216;
 }
 
+.fallback-banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 12px; }
+.fallback-banner button { padding: 5px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; }
+.fallback-banner button:disabled { opacity: 0.5; cursor: default; }
+
 .chat-title {
   font-weight: 650;
   overflow: hidden;
