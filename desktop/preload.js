@@ -12,5 +12,6 @@ contextBridge.exposeInMainWorld("desktop", {
   saveDeepSeek: (payload) => ipcRenderer.invoke("desktop:save-deepseek", payload),
   saveSettings: (payload) => ipcRenderer.invoke("desktop:save-settings", payload),
   exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
+  pickFolder: () => ipcRenderer.invoke("desktop:pick-folder"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
 });

@@ -61,6 +61,7 @@ interface Window {
     saveDeepSeek(input: DeepSeekInput): Promise<DesktopConfig>;
     saveSettings(input: DeepSeekInput): Promise<DesktopConfig>;
     exportDiagnostics(): Promise<string | null>;
+    pickFolder?(): Promise<string | null>;
     getPathForFile(file: File): string;
   };
 }

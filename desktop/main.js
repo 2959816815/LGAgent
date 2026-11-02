@@ -582,6 +582,15 @@ ipcMain.handle("desktop:save-models", async (_event, models) => {
   return restartBackend();
 });
 
+ipcMain.handle("desktop:pick-folder", async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openDirectory"],
+    title: "选择知识库文件夹",
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
 ipcMain.handle("desktop:test-model", async (_event, payload) => {
   const kind = payload?.kind === "local" ? "local" : "api";
   if (kind === "local") {
