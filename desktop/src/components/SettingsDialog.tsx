@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { KnowledgePanel } from "./KnowledgePanel";
 
 interface ModelEntry {
   id: string;
@@ -55,6 +56,7 @@ export function SettingsDialog({
   const [draft, setDraft] = useState<DraftModel | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<"models" | "knowledge">("models");
 
   useEffect(() => {
     let cancelled = false;
@@ -193,10 +195,28 @@ export function SettingsDialog({
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          void saveAll();
+          if (tab === "models") void saveAll();
         }}
       >
-        <h2>设置 · 模型</h2>
+        <h2>设置 · {tab === "models" ? "模型" : "知识库"}</h2>
+        <div className="settings-tabs">
+          <button
+            type="button"
+            className={tab === "models" ? "active" : ""}
+            onClick={() => setTab("models")}
+          >
+            模型
+          </button>
+          <button
+            type="button"
+            className={tab === "knowledge" ? "active" : ""}
+            onClick={() => setTab("knowledge")}
+          >
+            知识库
+          </button>
+        </div>
+        {tab === "models" && (
+          <>
         <p className="settings-hint">
           本地模型连接 Ollama；API 模型需要填写 Key 与地址。Key 会加密保存在本机。
         </p>
@@ -313,14 +333,20 @@ export function SettingsDialog({
             </div>
           </div>
         )}
+          </>
+        )}
+
+        {tab === "knowledge" && <KnowledgePanel />}
 
         <div className="modal-actions">
           <button type="button" onClick={onClose} disabled={busy}>
             关闭
           </button>
-          <button type="submit" className="primary" disabled={busy || !!draft}>
-            保存
-          </button>
+          {tab === "models" && (
+            <button type="submit" className="primary" disabled={busy || !!draft}>
+              保存
+            </button>
+          )}
         </div>
         {message && <p className="setup-message">{message}</p>}
       </form>

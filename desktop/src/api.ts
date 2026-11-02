@@ -3,6 +3,8 @@ import type {
   Attachment,
   ContextStats,
   FileEntry,
+  KnowledgeSearchResponse,
+  KnowledgeStatus,
   McpCatalogItem,
   McpServerStatus,
   ModelHealth,
@@ -263,4 +265,49 @@ export async function* streamMessage(
       index = buffer.indexOf("\n\n");
     }
   }
+}
+
+export async function getKnowledgeStatus(): Promise<KnowledgeStatus> {
+  return request<KnowledgeStatus>("/api/knowledge/status");
+}
+
+export async function addKnowledgeSource(path: string): Promise<KnowledgeStatus> {
+  return request<KnowledgeStatus>("/api/knowledge/sources", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function removeKnowledgeSource(id: number): Promise<KnowledgeStatus> {
+  return request<KnowledgeStatus>(`/api/knowledge/sources/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function startKnowledgeIndex(
+  rebuild = false,
+): Promise<KnowledgeStatus> {
+  return request<KnowledgeStatus>("/api/knowledge/index", {
+    method: "POST",
+    body: JSON.stringify({ rebuild }),
+  });
+}
+
+export async function cancelKnowledgeIndex(): Promise<KnowledgeStatus> {
+  return request<KnowledgeStatus>("/api/knowledge/cancel", { method: "POST" });
+}
+
+export async function setKnowledgeEnabled(enabled: boolean): Promise<KnowledgeStatus> {
+  return request<KnowledgeStatus>("/api/knowledge/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export async function searchKnowledge(
+  q: string,
+  topK = 5,
+): Promise<KnowledgeSearchResponse> {
+  const params = new URLSearchParams({ q, top_k: String(topK) });
+  return request<KnowledgeSearchResponse>(`/api/knowledge/search?${params}`);
 }

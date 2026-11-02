@@ -97,4 +97,37 @@ describe("SettingsDialog", () => {
       }),
     );
   });
+
+  it("opens the knowledge tab", async () => {
+    const api = await import("../api");
+    vi.spyOn(api, "getKnowledgeStatus").mockResolvedValue({
+      enabled: true,
+      indexing: false,
+      state: "idle",
+      progress: {
+        total_files: 0,
+        processed_files: 0,
+        indexed_documents: 0,
+        failed_documents: 0,
+        current_file: "",
+        started_at: "",
+        finished_at: "",
+        message: "",
+      },
+      sources: [],
+      documents: 0,
+      chunks: 0,
+      last_index_at: "",
+      embedding: {
+        model: "qwen3-embedding:0.6b",
+        available: true,
+        reason: "",
+        warning: "",
+        dim: 1024,
+      },
+    });
+    render(<SettingsDialog onClose={() => undefined} onSaved={() => undefined} />);
+    fireEvent.click(screen.getByText("知识库"));
+    expect(await screen.findByText("添加文件夹")).toBeTruthy();
+  });
 });

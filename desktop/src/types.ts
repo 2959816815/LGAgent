@@ -141,3 +141,61 @@ export interface McpCatalogItem {
   docs_url?: string;
   installed: boolean;
 }
+
+export interface KnowledgeSource {
+  id: number;
+  path: string;
+  document_count: number;
+  enabled: boolean;
+}
+
+export interface KnowledgeProgress {
+  total_files: number;
+  processed_files: number;
+  indexed_documents: number;
+  failed_documents: number;
+  current_file: string;
+  started_at: string;
+  finished_at: string;
+  message: string;
+}
+
+export interface KnowledgeStatus {
+  enabled: boolean;
+  indexing: boolean;
+  state: string;
+  started?: boolean;
+  progress: KnowledgeProgress;
+  sources: KnowledgeSource[];
+  documents: number;
+  chunks: number;
+  last_index_at: string;
+  embedding: {
+    model: string;
+    available: boolean;
+    reason: string;
+    warning: string;
+    dim: number;
+  };
+}
+
+export interface KnowledgeSearchResult {
+  chunk_id: number;
+  path: string;
+  absolute_path: string;
+  heading: string;
+  page: number | null;
+  sheet: string;
+  slide: number | null;
+  score: number;
+  text: string;
+}
+
+export interface KnowledgeSearchResponse {
+  query: string;
+  enabled: boolean;
+  embedding_used: boolean;
+  warning: string;
+  results: KnowledgeSearchResult[];
+  reason: string;
+}
