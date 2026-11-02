@@ -175,7 +175,9 @@ class McpApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(captured)
-        self.assertEqual(captured[0][0].name, "mcp__playwright__browser_navigate")
+        names = [tool.name for tool in captured[0]]
+        self.assertIn("mcp__playwright__browser_navigate", names)
+        self.assertIn("search_knowledge_base", names)
 
     def test_startup_failure_is_isolated(self):
         mcp = FakeMcp(fail_startup=True)

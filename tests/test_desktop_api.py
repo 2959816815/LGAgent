@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 import threading
 import unittest
 import uuid
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from desktop_api import _as_bool, _message_json, create_app
+from knowledge_service import KnowledgeService
 from session_store import SessionStore
 
 
@@ -276,7 +278,14 @@ class WorkspaceFilesApiTests(unittest.TestCase):
         (self.root / "docs").mkdir()
         (self.root / "docs" / "spec.md").write_text("spec", encoding="utf-8")
         (self.root / ".hidden.txt").write_text("hidden", encoding="utf-8")
-        self.app = create_app(root=self.root, token="t")
+        # 知识库数据库不能落在工作区里，否则会出现在文件面板中。
+        kb_root = Path(tempfile.mkdtemp(prefix="test_desktop_files_kb_"))
+        self.addCleanup(shutil.rmtree, kb_root, ignore_errors=True)
+        self.app = create_app(
+            root=self.root,
+            token="t",
+            knowledge_service=KnowledgeService(kb_root, autostart=False),
+        )
         self.client = TestClient(self.app)
         self.headers = {"X-Desktop-Token": "t"}
 

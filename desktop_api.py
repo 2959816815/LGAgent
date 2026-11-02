@@ -32,6 +32,8 @@ from approval import ApprovalBroker, UndoEmpty, UndoEntry, set_current as set_ap
 from mcp_client import McpError
 from mcp_manager import McpManager, McpManagerError
 from mcp_tools import build_mcp_tools
+from knowledge_service import KnowledgeBusyError, KnowledgeService
+from knowledge_store import KnowledgeError
 from model_registry import (
     ModelConfigError,
     get_profile,
@@ -301,6 +303,8 @@ def create_app(
     data_root: Path | None = None,
     workspace: Path | None = None,
     model_factory=None,
+    knowledge_service=None,
+    knowledge_autostart: bool = True,
 ) -> FastAPI:
     data_dir = Path(data_root or os.getenv("DSH_DATA_DIR") or root)
     store = _create_session_store(data_dir)
@@ -310,6 +314,9 @@ def create_app(
         worker_path=Path(__file__).resolve().parent / "subagent_worker.py",
     )
     mcp = mcp_manager if mcp_manager is not None else McpManager(data_dir)
+    knowledge = knowledge_service or KnowledgeService(
+        data_dir, autostart=knowledge_autostart
+    )
 
     class RunState:
         def __init__(self, run_id: str, session_id: str):
@@ -335,6 +342,16 @@ def create_app(
         except Exception:  # noqa: BLE001
             return []
 
+    def _model_extra_tools(key: str):
+        try:
+            profile = get_profile(key)
+        except ModelConfigError:
+            profile = None
+        tools = list(knowledge.tools())
+        if profile is None or profile.provider != "ollama":
+            tools = tools + _extra_tools()
+        return tools
+
     def _tool_tokens_for(key: str, extra_tools=None) -> int:
         try:
             return measure_tool_tokens(
@@ -359,7 +376,7 @@ def create_app(
                 session,
                 profile,
                 SYSTEM_PROMPT,
-                _tool_tokens_for(key, _extra_tools()),
+                _tool_tokens_for(key, _model_extra_tools(key)),
             )
             return stats.as_dict()
         except Exception:  # noqa: BLE001
@@ -394,7 +411,7 @@ def create_app(
         def attempt(key: str, profile, allow_summary: bool):
             tool_started.clear()
             emitted_tool_end.clear()
-            extra_tools = [] if profile.provider == "ollama" else _extra_tools()
+            extra_tools = _model_extra_tools(key)
             tool_tokens = _tool_tokens_for(key, extra_tools)
             if allow_summary and profile.provider != "ollama":
                 fallback = _fallback_profile(key)
@@ -405,7 +422,9 @@ def create_app(
                             profile,
                             fallback,
                             SYSTEM_PROMPT,
-                            _tool_tokens_for(fallback.key),
+                            _tool_tokens_for(
+                                fallback.key, _model_extra_tools(fallback.key)
+                            ),
                             model_factory,
                             store.save,
                         )
@@ -888,7 +907,7 @@ def create_app(
                     profile,
                     target,
                     SYSTEM_PROMPT,
-                    _tool_tokens_for(target.key),
+                    _tool_tokens_for(target.key, _model_extra_tools(target.key)),
                     model_factory,
                     store.save,
                     force=True,
@@ -1040,6 +1059,56 @@ def create_app(
             items.append(item)
         return {"models": items}
 
+    @app.get("/api/knowledge/status", dependencies=[Depends(require_token)])
+    def knowledge_status() -> dict:
+        return knowledge.status()
+
+    @app.post("/api/knowledge/sources", dependencies=[Depends(require_token)])
+    def add_knowledge_source(payload: dict) -> dict:
+        path = str(payload.get("path", "")).strip()
+        if not path:
+            raise HTTPException(status_code=400, detail="文件夹路径不能为空")
+        try:
+            return knowledge.add_source(path)
+        except KnowledgeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete(
+        "/api/knowledge/sources/{source_id}",
+        dependencies=[Depends(require_token)],
+    )
+    def remove_knowledge_source(source_id: int) -> dict:
+        try:
+            return knowledge.remove_source(source_id)
+        except KnowledgeError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/knowledge/index", dependencies=[Depends(require_token)])
+    def index_knowledge(payload: dict | None = None) -> dict:
+        rebuild = _as_bool((payload or {}).get("rebuild"), default=False)
+        try:
+            status = knowledge.start_index(rebuild=rebuild)
+        except KnowledgeBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {**status, "started": True}
+
+    @app.post("/api/knowledge/cancel", dependencies=[Depends(require_token)])
+    def cancel_knowledge() -> dict:
+        return knowledge.cancel()
+
+    @app.patch("/api/knowledge/settings", dependencies=[Depends(require_token)])
+    def knowledge_settings(payload: dict) -> dict:
+        if "enabled" in payload:
+            return knowledge.set_enabled(_as_bool(payload.get("enabled")))
+        return knowledge.status()
+
+    @app.get("/api/knowledge/search", dependencies=[Depends(require_token)])
+    def knowledge_search(q: str = "", top_k: int = 5) -> dict:
+        query = q.strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="查询不能为空")
+        return knowledge.search(query, top_k=top_k)
+
     @app.get("/api/models/{key}/health", dependencies=[Depends(require_token)])
     def model_health(key: str) -> dict:
         try:
@@ -1101,6 +1170,14 @@ def create_app(
             mcp.stop_all()
         except Exception:
             pass
+
+    @app.on_event("startup")
+    def start_knowledge() -> None:
+        knowledge.startup()
+
+    @app.on_event("shutdown")
+    def stop_knowledge() -> None:
+        knowledge.shutdown()
 
     return app
 
