@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from knowledge_embed import EmbeddingStatus
-from knowledge_indexer import KnowledgeIndexer
+from knowledge_indexer import KnowledgeIndexer, _Cancelled
 from knowledge_store import KnowledgeStore
 
 
@@ -19,6 +19,11 @@ class FakeEmbedder:
 
     def embed(self, texts):
         return [[1.0, 0.0] for _ in texts]
+
+
+class CancelEmbedder(FakeEmbedder):
+    def embed(self, texts):
+        raise _Cancelled()
 
 
 class IndexerTests(unittest.TestCase):
@@ -86,3 +91,12 @@ class IndexerTests(unittest.TestCase):
         self._wait()
 
         self.assertEqual(self.store.count_documents(), 0)
+
+    def test_cancellation_during_embedding_marks_the_run_cancelled(self):
+        (self.source_dir / "a.md").write_text("# 概述\n内容。", encoding="utf-8")
+        self.indexer = KnowledgeIndexer(self.store, CancelEmbedder())
+
+        self.indexer.start()
+        state = self._wait()
+
+        self.assertEqual(state["state"], "cancelled")

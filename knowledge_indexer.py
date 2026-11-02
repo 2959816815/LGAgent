@@ -214,6 +214,8 @@ class KnowledgeIndexer:
                         status="indexed",
                     )
                     indexed += 1
+                except _Cancelled:
+                    raise
                 except KnowledgeError:
                     raise
                 except Exception as exc:  # noqa: BLE001
