@@ -122,6 +122,14 @@ SYSTEM_PROMPT += (
     "用 wait_agent 等待结果。不要为简单任务创建子 agent。"
 )
 
+SYSTEM_PROMPT += (
+    "\n\n知识库：当用户询问自己的资料、文档、笔记、之前说过的内容，"
+    "或明确提到某个文件/主题可能收在本地知识库时，先用 search_knowledge_base 检索；"
+    "普通常识问题不要调用。检索结果不足时如实说明，可以建议用户"
+    "在设置 → 知识库中添加文件夹。使用知识库内容回答时，"
+    "在相应句子后标注“来源: 路径”。"
+)
+
 # 文件读取的安全上限
 # 允许分页读取较大的文本文件；单次返回仍受 max_chars 限制。
 _MAX_READ_BYTES = 20_000_000
@@ -762,6 +770,7 @@ CORE_TOOL_NAMES = frozenset(
         "read_csv",
         "read_json",
         "read_pdf",
+        "search_knowledge_base",
     }
 )
 
@@ -796,7 +805,14 @@ def collect_tools(
         profile = None
     core_only = profile is not None and profile.provider == "ollama"
     tools = select_tools(read_only, core_only=core_only)
-    if not core_only:
+    if core_only:
+        if extra_tools:
+            tools = tools + [
+                tool
+                for tool in extra_tools
+                if getattr(tool, "name", "") in CORE_TOOL_NAMES
+            ]
+    else:
         if include_subagent_tools and manager is not None:
             from subagent_tools import build_subagent_tools
 
