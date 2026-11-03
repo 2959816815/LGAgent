@@ -182,6 +182,9 @@ class RemoteMcpClient:
     def _thread_main(self) -> None:
         try:
             asyncio.run(self._supervise())
+        except asyncio.CancelledError:
+            # A deliberate close() cancels the supervisor; this is not a startup error.
+            pass
         except Exception as exc:  # noqa: BLE001
             self._startup_error = _sanitize(str(exc))
             self._ready.set()
