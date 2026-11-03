@@ -86,3 +86,74 @@ class RemoteClientTests(unittest.TestCase):
                     replacement.thread.join(timeout=5)
             finally:
                 client.close()
+
+
+class RemoteResourcePromptTests(unittest.TestCase):
+    def _config(self, server, token="test-token"):
+        return RemoteMcpConfig(
+            url=server.url,
+            transport=server.transport,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+            connect_timeout=5.0,
+            ping_interval=0.5,
+        )
+
+    def test_lists_and_reads_resources(self):
+        with FastMcpServer("streamable-http") as server:
+            client = RemoteMcpClient(self._config(server))
+            try:
+                client.start()
+                resources = client.list_resources()
+                self.assertTrue(any(item.uri == "demo://readme" for item in resources))
+                content = client.read_resource("demo://readme")
+                self.assertEqual(content["text"], "hello resource")
+            finally:
+                client.close()
+
+    def test_lists_and_gets_prompts(self):
+        with FastMcpServer("streamable-http") as server:
+            client = RemoteMcpClient(self._config(server))
+            try:
+                client.start()
+                prompts = client.list_prompts()
+                self.assertTrue(any(item.name == "summarize" for item in prompts))
+                result = client.get_prompt("summarize", {"text": "内容"})
+                self.assertEqual(result["messages"][0].role, "user")
+                self.assertIn("请总结", result["messages"][0].text)
+            finally:
+                client.close()
+
+    def test_notifications_set_dirty_flags(self):
+        from mcp import types
+
+        client = RemoteMcpClient(
+            RemoteMcpConfig(url="http://127.0.0.1:1", headers={}),
+        )
+        import asyncio
+
+        asyncio.run(
+            client._on_message(
+                types.ServerNotification(
+                    root=types.ToolListChangedNotification()
+                )
+            )
+        )
+        asyncio.run(
+            client._on_message(
+                types.ServerNotification(
+                    root=types.ResourceListChangedNotification()
+                )
+            )
+        )
+        asyncio.run(
+            client._on_message(
+                types.ServerNotification(
+                    root=types.PromptListChangedNotification()
+                )
+            )
+        )
+
+        self.assertTrue(client.tools_dirty)
+        self.assertTrue(client.resources_dirty)
+        self.assertTrue(client.prompts_dirty)
