@@ -19,7 +19,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 
 class McpError(RuntimeError):
@@ -36,6 +36,24 @@ class McpToolSpec:
     description: str
     input_schema: dict[str, Any]
     read_only: bool = False
+
+
+class McpClient(Protocol):
+    def start(self) -> None: ...
+    def close(self) -> None: ...
+
+    @property
+    def alive(self) -> bool: ...
+
+    @property
+    def tools(self) -> list[McpToolSpec]: ...
+
+    @property
+    def tools_dirty(self) -> bool: ...
+
+    def refresh_tools(self) -> list[McpToolSpec]: ...
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> str: ...
 
 
 def _strip_nul(text: str) -> str:
