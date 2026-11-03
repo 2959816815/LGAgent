@@ -30,7 +30,7 @@ from context_builder import (
 )
 from approval import ApprovalBroker, UndoEmpty, UndoEntry, set_current as set_approval_broker, undo_last
 from mcp_client import McpError
-from mcp_manager import McpManager, McpManagerError
+from mcp_manager import McpManager, McpManagerError, _sanitize
 from mcp_tools import build_mcp_tools
 from knowledge_service import KnowledgeBusyError, KnowledgeService
 from knowledge_store import KnowledgeError
@@ -254,6 +254,12 @@ def _mcp_status_json(status: Any) -> dict:
         "tool_count": status.tool_count,
         "tools": status.tools,
         "last_error": status.last_error,
+        "transport": getattr(status, "transport", "stdio"),
+        "resource_count": getattr(status, "resource_count", 0),
+        "prompt_count": getattr(status, "prompt_count", 0),
+        "capabilities": getattr(status, "capabilities", {}),
+        "server_info": getattr(status, "server_info", {}),
+        "warnings": getattr(status, "warnings", []),
     }
 
 
@@ -982,8 +988,152 @@ def create_app(
         except (McpError, McpManagerError) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    @app.post("/api/mcp/servers/test", dependencies=[Depends(require_token)])
+    def test_mcp_server(payload: dict) -> dict:
+        try:
+            return mcp.test_remote_server(payload)
+        except (McpError, McpManagerError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=_sanitize(str(exc))) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+
+    @app.post("/api/mcp/import", dependencies=[Depends(require_token)])
+    def import_mcp_servers(payload: dict) -> dict:
+        from mcp_import import parse_import_payload
+
+        confirm = _as_bool(payload.get("confirm"), default=False)
+        existing = {status.id for status in mcp.list_servers()}
+        entries, errors = parse_import_payload(payload.get("payload"), existing)
+        if not confirm:
+            return {
+                "entries": [
+                    {
+                        "id": entry["id"],
+                        "name": entry.get("name", entry["id"]),
+                        "transport": entry.get("transport", "stdio"),
+                        "conflict": bool(entry.get("conflict")),
+                    }
+                    for entry in entries
+                ],
+                "errors": errors,
+            }
+        if errors:
+            raise HTTPException(status_code=400, detail={"errors": errors})
+        try:
+            statuses = mcp.import_servers(entries)
+        except (McpError, McpManagerError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=_sanitize(str(exc))) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+        return {
+            "imported": [
+                {"id": status.id, "transport": status.transport}
+                for status in statuses
+            ]
+        }
+
+    @app.get("/api/mcp/servers/{server_id}/resources", dependencies=[Depends(require_token)])
+    def mcp_resources(server_id: str) -> dict:
+        try:
+            resources = mcp.list_resources(server_id)
+            templates = mcp.list_resource_templates(server_id)
+        except (McpError, McpManagerError, AttributeError) as exc:
+            raise HTTPException(status_code=400, detail=_sanitize(str(exc))) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+        return {
+            "resources": [
+                {
+                    "uri": item.uri,
+                    "name": item.name,
+                    "description": item.description,
+                    "mime_type": item.mime_type,
+                }
+                for item in resources
+            ],
+            "templates": [
+                {
+                    "uri_template": item.uri_template,
+                    "name": item.name,
+                    "description": item.description,
+                    "mime_type": item.mime_type,
+                }
+                for item in templates
+            ],
+        }
+
+    @app.get("/api/mcp/servers/{server_id}/resources/read", dependencies=[Depends(require_token)])
+    def mcp_read_resource(server_id: str, uri: str = "") -> dict:
+        if not uri.strip():
+            raise HTTPException(status_code=400, detail="uri 不能为空")
+        try:
+            return {"uri": uri, **mcp.read_resource(server_id, uri)}
+        except (McpError, McpManagerError, AttributeError) as exc:
+            raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+
+    @app.get("/api/mcp/servers/{server_id}/prompts", dependencies=[Depends(require_token)])
+    def mcp_prompts(server_id: str) -> dict:
+        try:
+            prompts = mcp.list_prompts(server_id)
+        except (McpError, McpManagerError, AttributeError) as exc:
+            raise HTTPException(status_code=400, detail=_sanitize(str(exc))) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+        return {
+            "prompts": [
+                {
+                    "name": item.name,
+                    "description": item.description,
+                    "arguments": [
+                        {
+                            "name": arg.name,
+                            "description": arg.description,
+                            "required": arg.required,
+                        }
+                        for arg in item.arguments
+                    ],
+                }
+                for item in prompts
+            ]
+        }
+
+    @app.post("/api/mcp/servers/{server_id}/prompts/get", dependencies=[Depends(require_token)])
+    def mcp_get_prompt(server_id: str, payload: dict) -> dict:
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name 不能为空")
+        arguments = payload.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            raise HTTPException(status_code=400, detail="arguments 必须是对象")
+        try:
+            result = mcp.get_prompt(
+                server_id, name, {str(k): str(v) for k, v in arguments.items()}
+            )
+        except (McpError, McpManagerError, AttributeError) as exc:
+            raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+        return {
+            "name": result["name"],
+            "description": result["description"],
+            "messages": [
+                {"role": message.role, "text": message.text}
+                for message in result["messages"]
+            ],
+        }
+
     @app.post("/api/mcp/servers", dependencies=[Depends(require_token)])
     def add_mcp_server(payload: dict) -> dict:
+        if payload.get("kind") == "remote":
+            try:
+                status = mcp.add_remote_server(payload)
+            except (McpError, McpManagerError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=_sanitize(str(exc))) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail=_sanitize(str(exc))) from exc
+            return {"server": _mcp_status_json(status)}
         preset_id = str(payload.get("preset_id") or "").strip()
         if not preset_id:
             raise HTTPException(status_code=400, detail="缺少 preset_id")
