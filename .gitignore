@@ -15,6 +15,7 @@ desktop/.vite/
 .sidecar-test/
 .install-test/
 .test-profile/
+.e2e-data-*/
 dist-sidecar/
 release/
 /build/

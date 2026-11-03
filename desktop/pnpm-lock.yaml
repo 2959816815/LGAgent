@@ -45,6 +45,9 @@ importers:
       jsdom:
         specifier: ^25.0.1
         version: 25.0.1(supports-color@8.1.1)
+      playwright-core:
+        specifier: ^1.64.1
+        version: 1.64.1
       typescript:
         specifier: ^5.6.2
         version: 5.9.3
@@ -1552,6 +1555,11 @@ packages:
 
   playwright-core@1.64.0-alpha-1790635538000:
     resolution: {integrity: sha512-pNwaXirhXMRLaRQs4NQ18EpTdtDoFwyPH9FOaaDC7YXG4hpwE2xmwCic/1srbuExVQC7zT9LJSJpDBAru+Vo9A==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright-core@1.64.1:
+    resolution: {integrity: sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -3659,6 +3667,8 @@ snapshots:
       tslib: 2.8.1
 
   playwright-core@1.64.0-alpha-1790635538000: {}
+
+  playwright-core@1.64.1: {}
 
   playwright@1.64.0-alpha-1790635538000:
     dependencies:
