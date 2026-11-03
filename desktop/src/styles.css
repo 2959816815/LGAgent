@@ -1347,3 +1347,21 @@ button {
 .knowledge-progress-text { margin-top: 4px; font-size: 11px; color: var(--muted); word-break: break-all; }
 
 .knowledge-counts { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+
+.mcp-modes { display: flex; gap: 6px; margin-bottom: 8px; }
+.mcp-modes button { padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--muted); cursor: pointer; }
+.mcp-modes button.active { color: var(--text); border-color: var(--accent); }
+.mcp-remote-form, .mcp-import-form { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.mcp-remote-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.mcp-remote-form input, .mcp-remote-form select, .mcp-import-form textarea { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); color: var(--text); }
+.mcp-header-row { display: flex; gap: 6px; align-items: center; }
+.mcp-header-row input { flex: 1; min-width: 0; }
+.mcp-warning { padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; color: #c47a00; font-size: 12px; }
+.mcp-test-ok { color: var(--accent); font-size: 12px; }
+.mcp-detail { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.mcp-detail-section { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.mcp-resource { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.mcp-resource-content { max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); }
+.mcp-prompt { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--border); border-radius: 6px; }
+.mcp-prompt input { padding: 5px 7px; }
+.mcp-prompt-preview pre { max-height: 220px; overflow: auto; white-space: pre-wrap; }

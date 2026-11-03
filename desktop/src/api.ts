@@ -6,7 +6,15 @@ import type {
   KnowledgeSearchResponse,
   KnowledgeStatus,
   McpCatalogItem,
+  McpImportPreview,
+  McpPromptInfo,
+  McpPromptResult,
+  McpRemoteConfig,
+  McpResourceContent,
+  McpResourceInfo,
+  McpResourceTemplateInfo,
   McpServerStatus,
+  McpTestResult,
   ModelHealth,
   ModelInfo,
   SessionDetail,
@@ -202,6 +210,63 @@ export async function setMcpEnabled(id: string, enabled: boolean): Promise<void>
   await request(`/api/mcp/servers/${encodeURIComponent(id)}/enable`, {
     method: "POST",
     body: JSON.stringify({ enabled }),
+  });
+}
+
+export async function addRemoteMcpServer(config: McpRemoteConfig): Promise<void> {
+  await request("/api/mcp/servers", {
+    method: "POST",
+    body: JSON.stringify({ kind: "remote", ...config }),
+  });
+}
+
+export async function testMcpServer(
+  config: Omit<McpRemoteConfig, "id" | "name"> & { id?: string; name?: string },
+): Promise<McpTestResult> {
+  return request<McpTestResult>("/api/mcp/servers/test", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+export async function importMcpServers(
+  payload: string | Record<string, unknown>,
+  confirm: boolean,
+): Promise<McpImportPreview | { imported: { id: string; transport: string }[] }> {
+  return request("/api/mcp/import", {
+    method: "POST",
+    body: JSON.stringify({ payload, confirm }),
+  });
+}
+
+export async function getMcpResources(id: string): Promise<{
+  resources: McpResourceInfo[];
+  templates: McpResourceTemplateInfo[];
+}> {
+  return request(`/api/mcp/servers/${encodeURIComponent(id)}/resources`);
+}
+
+export async function readMcpResource(
+  id: string,
+  uri: string,
+): Promise<McpResourceContent> {
+  return request(
+    `/api/mcp/servers/${encodeURIComponent(id)}/resources/read?uri=${encodeURIComponent(uri)}`,
+  );
+}
+
+export async function getMcpPrompts(id: string): Promise<{ prompts: McpPromptInfo[] }> {
+  return request(`/api/mcp/servers/${encodeURIComponent(id)}/prompts`);
+}
+
+export async function getMcpPrompt(
+  id: string,
+  name: string,
+  args: Record<string, string>,
+): Promise<McpPromptResult> {
+  return request(`/api/mcp/servers/${encodeURIComponent(id)}/prompts/get`, {
+    method: "POST",
+    body: JSON.stringify({ name, arguments: args }),
   });
 }
 

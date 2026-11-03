@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import {
   addMcpServer,
+  addRemoteMcpServer,
   cancelAgent,
   cancelRun,
   compactSession,
   createSession,
   deleteSession,
+  getMcpPrompt,
+  getMcpPrompts,
+  getMcpResources,
   getModelHealth,
   getSession,
+  importMcpServers,
   initApi,
   listAgents,
   listMcpCatalog,
@@ -15,6 +20,7 @@ import {
   listModels,
   listSessions,
   patchSessionModel,
+  readMcpResource,
   removeMcpServer,
   renameSession,
   restartMcpServer,
@@ -22,6 +28,7 @@ import {
   setMcpEnabled,
   setMcpPermission,
   streamMessage,
+  testMcpServer,
   undoSession,
 } from "./api";
 import { Chat } from "./components/Chat";
@@ -34,6 +41,8 @@ import type {
   ApprovalRequest,
   Attachment,
   McpCatalogItem,
+  McpImportPreview,
+  McpRemoteConfig,
   McpServerStatus,
   Message,
   ModelInfo,
@@ -209,6 +218,20 @@ export function App() {
 
   async function setPermission(id: string, permission: string): Promise<void> {
     await setMcpPermission(id, permission);
+    await refreshMcp();
+  }
+
+  async function addRemoteMcp(config: McpRemoteConfig): Promise<void> {
+    await addRemoteMcpServer(config);
+    await refreshMcp();
+  }
+
+  async function previewMcp(payload: string): Promise<McpImportPreview> {
+    return (await importMcpServers(payload, false)) as McpImportPreview;
+  }
+
+  async function confirmMcp(payload: string): Promise<void> {
+    await importMcpServers(payload, true);
     await refreshMcp();
   }
 
@@ -583,6 +606,11 @@ export function App() {
         onMcpPermission={(id, permission) =>
           void setPermission(id, permission).catch((cause) => setError(errorText(cause)))
         }
+        onAddRemote={addRemoteMcp}
+        onTestRemote={(config) => testMcpServer(config)}
+        onImportPreview={previewMcp}
+        onImportConfirm={confirmMcp}
+        onInsertContext={(text) => setInput((current) => current ? `${current}\n\n${text}` : text)}
         onInsertPath={(path) => insertPaths([path])}
         onCancelAgent={(id) => void cancelAgentAndRefresh(id)}
         onCompact={() => void compactCurrent()}

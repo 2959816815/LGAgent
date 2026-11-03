@@ -6,7 +6,10 @@ import type {
   AgentRecord,
   FileEntry,
   McpCatalogItem,
+  McpImportPreview,
+  McpRemoteConfig,
   McpServerStatus,
+  McpTestResult,
   Message,
   ModelInfo,
   SessionDetail,
@@ -206,6 +209,11 @@ export function RightPanel(props: {
   onAddMcp: (presetId: string, env: Record<string, string>) => Promise<void>;
   onRemoveMcp: (id: string) => void;
   onMcpPermission: (id: string, permission: string) => void;
+  onAddRemote?: (config: McpRemoteConfig) => Promise<void>;
+  onTestRemote?: (config: McpRemoteConfig) => Promise<McpTestResult>;
+  onImportPreview?: (payload: string) => Promise<McpImportPreview>;
+  onImportConfirm?: (payload: string) => Promise<void>;
+  onInsertContext?: (text: string) => void;
   onInsertPath: (path: string) => void;
   onCancelAgent: (id: string) => void;
   onCompact: () => void;
@@ -351,6 +359,11 @@ export function RightPanel(props: {
           onAdd={props.onAddMcp}
           onRemove={props.onRemoveMcp}
           onPermission={props.onMcpPermission}
+          onAddRemote={props.onAddRemote}
+          onTestRemote={props.onTestRemote}
+          onImportPreview={props.onImportPreview}
+          onImportConfirm={props.onImportConfirm}
+          onInsertContext={props.onInsertContext}
         />
       )}
     </aside>

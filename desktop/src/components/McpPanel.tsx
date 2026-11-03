@@ -1,6 +1,15 @@
 import { useState } from "react";
 
-import type { McpCatalogItem, McpServerStatus } from "../types";
+import type {
+  McpCatalogItem,
+  McpImportPreview,
+  McpRemoteConfig,
+  McpServerStatus,
+  McpTestResult,
+} from "../types";
+import { McpImportForm } from "./McpImportForm";
+import { McpRemoteForm } from "./McpRemoteForm";
+import { McpServerDetail } from "./McpServerDetail";
 
 const STATUS_LABEL: Record<string, string> = {
   starting: "启动中",
@@ -25,8 +34,15 @@ export function McpPanel(props: {
   onAdd: (presetId: string, env: Record<string, string>) => Promise<void>;
   onRemove: (id: string) => void;
   onPermission: (id: string, permission: string) => void;
+  onAddRemote?: (config: McpRemoteConfig) => Promise<void>;
+  onTestRemote?: (config: McpRemoteConfig) => Promise<McpTestResult>;
+  onImportPreview?: (payload: string) => Promise<McpImportPreview>;
+  onImportConfirm?: (payload: string) => Promise<void>;
+  onInsertContext?: (text: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const [mode, setMode] = useState<"catalog" | "remote" | "import">("catalog");
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [selected, setSelected] = useState<McpCatalogItem | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -77,44 +93,67 @@ export function McpPanel(props: {
 
       {adding && (
         <div className="mcp-catalog">
-          {props.catalog.map((preset) => (
-            <div key={preset.id} className="mcp-preset">
-              <div className="mcp-preset-head">
-                <strong>{preset.name}</strong>
-                <button
-                  disabled={preset.installed || saving}
-                  onClick={() => choose(preset)}
-                >
-                  {preset.installed ? "已添加" : "添加"}
-                </button>
-              </div>
-              <div className="mcp-preset-desc">{preset.description}</div>
-              {selected?.id === preset.id && (
-                <div className="mcp-preset-form">
-                  {preset.fields.map((field) => (
-                    <label key={field.key}>
-                      {field.label}
-                      <input
-                        type={field.secret ? "password" : "text"}
-                        value={values[field.key] ?? ""}
-                        placeholder={field.default}
-                        onChange={(event) =>
-                          setValues((current) => ({
-                            ...current,
-                            [field.key]: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                  ))}
-                  <button disabled={saving} onClick={submit}>
-                    {saving ? "添加中..." : "确认添加"}
-                  </button>
+          <div className="mcp-modes">
+            <button type="button" className={mode === "catalog" ? "active" : ""} onClick={() => setMode("catalog")}>目录</button>
+            <button type="button" className={mode === "remote" ? "active" : ""} onClick={() => setMode("remote")}>手动远程</button>
+            <button type="button" className={mode === "import" ? "active" : ""} onClick={() => setMode("import")}>JSON 导入</button>
+          </div>
+          {mode === "catalog" && (
+            <>
+              {props.catalog.map((preset) => (
+                <div key={preset.id} className="mcp-preset">
+                  <div className="mcp-preset-head">
+                    <strong>{preset.name}</strong>
+                    <button
+                      disabled={preset.installed || saving}
+                      onClick={() => choose(preset)}
+                    >
+                      {preset.installed ? "已添加" : "添加"}
+                    </button>
+                  </div>
+                  <div className="mcp-preset-desc">{preset.description}</div>
+                  {selected?.id === preset.id && (
+                    <div className="mcp-preset-form">
+                      {preset.fields.map((field) => (
+                        <label key={field.key}>
+                          {field.label}
+                          <input
+                            type={field.secret ? "password" : "text"}
+                            value={values[field.key] ?? ""}
+                            placeholder={field.default}
+                            onChange={(event) =>
+                              setValues((current) => ({
+                                ...current,
+                                [field.key]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      ))}
+                      <button disabled={saving} onClick={submit}>
+                        {saving ? "添加中..." : "确认添加"}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
-          {error && <div className="mcp-error">{error}</div>}
+              ))}
+              {error && <div className="mcp-error">{error}</div>}
+            </>
+          )}
+          {mode === "remote" && props.onAddRemote && props.onTestRemote && (
+            <McpRemoteForm
+              onSave={async (config) => { await props.onAddRemote!(config); setAdding(false); }}
+              onTest={props.onTestRemote}
+              onCancel={() => setAdding(false)}
+            />
+          )}
+          {mode === "import" && props.onImportPreview && props.onImportConfirm && (
+            <McpImportForm
+              onPreview={props.onImportPreview}
+              onConfirm={async (payload) => { await props.onImportConfirm!(payload); setAdding(false); }}
+              onCancel={() => setAdding(false)}
+            />
+          )}
         </div>
       )}
 
@@ -127,7 +166,19 @@ export function McpPanel(props: {
               {STATUS_LABEL[server.status] ?? server.status}
             </span>
           </div>
-          <div className="mcp-meta">{server.tool_count} 个工具</div>
+          <div className="mcp-meta">
+            {server.transport === "sse" ? "远程 SSE" : server.transport === "streamable-http" ? "远程 HTTP" : "本地 stdio"}
+            {" · "}{server.tool_count} 工具 · {server.resource_count ?? 0} 资源 · {server.prompt_count ?? 0} Prompt
+          </div>
+          {(server.warnings ?? []).map((warning) => (
+            <div className="mcp-warning" key={warning}>{warning}</div>
+          ))}
+          <button type="button" onClick={() => setDetailId(detailId === server.id ? null : server.id)}>
+            {detailId === server.id ? "收起详情" : "详情"}
+          </button>
+          {detailId === server.id && props.onInsertContext && (
+            <McpServerDetail server={server} onInsert={props.onInsertContext} />
+          )}
           <label className="mcp-permission">
             权限
             <select

@@ -35,6 +35,27 @@ vi.mock("./api", () => {
     compactSession: vi.fn(async () => detail),
     cancelRun: vi.fn(),
     getModelHealth: vi.fn(async () => ({ key: "deepseek", reachable: true })),
+    addRemoteMcpServer: vi.fn(async () => undefined),
+    testMcpServer: vi.fn(async () => ({
+      ok: true,
+      transport: "streamable-http",
+      server_info: {},
+      capabilities: {},
+      tools: 0,
+      resources: 0,
+      prompts: 0,
+      error: "",
+    })),
+    importMcpServers: vi.fn(async () => ({ entries: [], errors: [] })),
+    getMcpResources: vi.fn(async () => ({ resources: [], templates: [] })),
+    readMcpResource: vi.fn(async () => ({
+      uri: "",
+      text: "",
+      binary: false,
+      size: 0,
+    })),
+    getMcpPrompts: vi.fn(async () => ({ prompts: [] })),
+    getMcpPrompt: vi.fn(async () => ({ name: "", description: "", messages: [] })),
   };
 });
 

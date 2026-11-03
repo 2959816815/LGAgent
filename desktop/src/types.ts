@@ -119,6 +119,84 @@ export interface McpServerStatus {
   tools?: string[];
   last_error?: string | null;
   started_at?: string | null;
+  transport?: "stdio" | "streamable-http" | "sse";
+  resource_count?: number;
+  prompt_count?: number;
+  capabilities?: { tools?: boolean; resources?: boolean; prompts?: boolean };
+  server_info?: { name?: string; version?: string };
+  warnings?: string[];
+}
+
+export interface McpRemoteConfig {
+  id: string;
+  name: string;
+  url: string;
+  transport: "streamable-http" | "sse";
+  headers: Record<string, string>;
+  secret_headers?: string[];
+  verify_tls: boolean;
+  timeout: number;
+  permission: string;
+}
+
+export interface McpTestResult {
+  ok: boolean;
+  transport: string;
+  server_info: Record<string, string>;
+  capabilities: Record<string, boolean>;
+  tools: number;
+  resources: number;
+  prompts: number;
+  error: string;
+}
+
+export interface McpResourceInfo {
+  uri: string;
+  name: string;
+  description: string;
+  mime_type: string;
+}
+
+export interface McpResourceTemplateInfo {
+  uri_template: string;
+  name: string;
+  description: string;
+  mime_type: string;
+}
+
+export interface McpResourceContent {
+  uri: string;
+  text: string;
+  binary: boolean;
+  size: number;
+}
+
+export interface McpPromptArgumentInfo {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
+export interface McpPromptInfo {
+  name: string;
+  description: string;
+  arguments: McpPromptArgumentInfo[];
+}
+
+export interface McpPromptMessageInfo {
+  role: string;
+  text: string;
+}
+
+export interface McpPromptResult {
+  name: string;
+  description: string;
+  messages: McpPromptMessageInfo[];
+}
+
+export interface McpImportPreview {
+  entries: { id: string; name: string; transport: string; conflict: boolean }[];
+  errors: string[];
 }
 
 export interface McpCatalogField {
