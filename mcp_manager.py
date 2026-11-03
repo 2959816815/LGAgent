@@ -42,6 +42,7 @@ class ManagedProcess:
 
 
 _VALID_PERMISSIONS = {"auto", "ask", "deny"}
+_REMOTE_TRANSPORTS = {"streamable-http", "sse"}
 _ENV_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _SERVER_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 # 这些 key 的值按密钥处理：落盘前用 DPAPI 加密。
@@ -50,6 +51,32 @@ _SECRET_KEY = re.compile(r"(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.IG
 
 def _looks_secret(key: str) -> bool:
     return bool(_SECRET_KEY.search(key))
+
+
+def _transport(item: dict) -> str:
+    return str(item.get("transport") or "stdio").strip().lower()
+
+
+def _header_is_secret(name: str, secret_headers: set[str]) -> bool:
+    lowered = str(name or "").strip().lower()
+    if lowered in {"authorization", "proxy-authorization"}:
+        return True
+    if lowered in secret_headers:
+        return True
+    return _looks_secret(name)
+
+
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)(authorization\s*:\s*)([^\s,;]+(?:\s+[^\s,;]+)?)"),
+    re.compile(r"(?i)((?:token|key|secret|password|passwd|credential)\s*[=:]\s*)([^\s,;]+)"),
+)
+
+
+def _sanitize(text: str) -> str:
+    cleaned = str(text or "")
+    for pattern in _SECRET_PATTERNS:
+        cleaned = pattern.sub(lambda match: match.group(1) + "***", cleaned)
+    return cleaned
 
 
 class McpManager:
@@ -122,11 +149,29 @@ class McpManager:
         for item in raw["servers"]:
             if not isinstance(item, dict) or not item.get("id"):
                 raise McpManagerError("MCP server 缺少 id")
-            if not isinstance(item.get("command"), list) or not item["command"]:
-                raise McpManagerError(f"MCP server {item.get('id')} 缺少 command")
+            transport = _transport(item)
+            if transport not in {"stdio", *_REMOTE_TRANSPORTS}:
+                raise McpManagerError(f"MCP server {item.get('id')} transport 无效")
             permission = str(item.get("permission") or "ask")
             if permission not in _VALID_PERMISSIONS:
                 raise McpManagerError(f"MCP server {item.get('id')} permission 无效")
+            if transport == "stdio":
+                if not isinstance(item.get("command"), list) or not item["command"]:
+                    raise McpManagerError(f"MCP server {item.get('id')} 缺少 command")
+            else:
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    raise McpManagerError(f"MCP server {item.get('id')} 缺少 url")
+                if "${" not in url and not url.startswith(("http://", "https://")):
+                    raise McpManagerError(f"MCP server {item.get('id')} url 必须是 http/https")
+                headers = item.get("headers") or {}
+                if not isinstance(headers, dict):
+                    raise McpManagerError(f"MCP server {item.get('id')} headers 必须是对象")
+                if any(not isinstance(value, (str, int, float, bool)) for value in headers.values()):
+                    raise McpManagerError(f"MCP server {item.get('id')} header 值必须是字符串")
+                item["headers"] = {str(k): str(v) for k, v in headers.items()}
+                item.setdefault("verify_tls", True)
+                item.setdefault("timeout", 60)
         return raw
 
     def _servers(self) -> list[dict]:
@@ -168,6 +213,8 @@ class McpManager:
             return
         changed = False
         for item in self._servers():
+            if _transport(item) != "stdio":
+                continue
             command = item.get("command")
             if not isinstance(command, list) or not command:
                 continue
@@ -194,6 +241,22 @@ class McpManager:
             )
             for item in self._servers()
         )
+        for item in self._servers():
+            secret_names = {
+                str(name).strip().lower()
+                for name in (item.get("secret_headers") or [])
+            }
+            headers = item.get("headers")
+            if not isinstance(headers, dict):
+                continue
+            for key, value in list(headers.items()):
+                if not isinstance(value, str):
+                    value = str(value)
+                if _header_is_secret(key, secret_names) and not is_protected(value):
+                    headers[key] = protect(value)
+                    has_plaintext = True
+                else:
+                    headers[key] = value
         if has_plaintext:
             self._save_config()
 
