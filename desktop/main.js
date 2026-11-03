@@ -15,6 +15,7 @@ const path = require("path");
 const crypto = require("crypto");
 const readline = require("readline");
 const { createSettingsStore, DEFAULTS } = require("./settings.cjs");
+const { autoUpdater } = require("electron-updater");
 
 const BOOT_LOG = process.env.LANGGRAPH_BOOT_LOG || path.join(os.tmpdir(), "langgraph-boot.log");
 function bootLog(stage, error) {
@@ -639,11 +640,47 @@ async function createWindowWithRetry() {
   }
 }
 
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("error", (error) => bootLog("autoUpdater error", error));
+  autoUpdater.on("update-downloaded", async (info) => {
+    const options = {
+      type: "info",
+      title: "更新已下载",
+      message: `新版本 ${info.version} 已下载。`,
+      detail: "重启应用后完成安装。",
+      buttons: ["立即重启", "稍后"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    try {
+      const result = mainWindow
+        ? await dialog.showMessageBox(mainWindow, options)
+        : await dialog.showMessageBox(options);
+      if (result.response === 0) {
+        autoUpdater.quitAndInstall();
+      }
+    } catch (error) {
+      bootLog("autoUpdater dialog failed", error);
+    }
+  });
+  const timer = setTimeout(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+      bootLog("autoUpdater check failed", error);
+    });
+  }, 5000);
+  if (typeof timer.unref === "function") timer.unref();
+}
+
 app.whenReady().then(async () => {
   bootLog("app ready");
   ensureShortcuts();
   initSettings();
   await createWindowWithRetry();
+  setupAutoUpdater();
 }).catch((error) => {
   bootLog("whenReady failed", error);
   console.error(error);

@@ -10,6 +10,10 @@ files:
   - settings.cjs
   - package.json
   - dist/**/*
+publish:
+  provider: github
+  owner: 2959816815
+  repo: LGAgent
 extraResources:
   - from: ../dist-sidecar/langgraph-sidecar
     to: sidecar
