@@ -12,8 +12,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mcp_auth import StaticHeaderAuthProvider
 from mcp_catalog import catalog_items, get_preset
-from mcp_client import McpError, McpToolSpec, StdioMcpClient
+from mcp_client import McpClient, McpError, McpToolSpec, StdioMcpClient
+from mcp_resources import McpPrompt, McpResource, McpResourceTemplate
+from remote_mcp_client import RemoteMcpClient, RemoteMcpConfig
 from secret_store import available as secrets_available
 from secret_store import is_protected, protect, unprotect
 
@@ -32,12 +35,18 @@ class McpServerStatus:
     tool_count: int = 0
     tools: list[str] = field(default_factory=list)
     last_error: str | None = None
+    transport: str = "stdio"
+    resource_count: int = 0
+    prompt_count: int = 0
+    capabilities: dict[str, bool] = field(default_factory=dict)
+    server_info: dict[str, str] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
-class ManagedProcess:
-    client: StdioMcpClient
-    process: Any
+class ManagedServer:
+    client: McpClient
+    transport: str
     started_at: float
 
 
@@ -92,7 +101,7 @@ class McpManager:
         self.max_tools = max(1, int(max_tools))
         self.startup_timeout = float(startup_timeout)
         self.tool_timeout = float(tool_timeout)
-        self._processes: dict[str, ManagedProcess] = {}
+        self._processes: dict[str, ManagedServer] = {}
         self._starting: set[str] = set()
         self._state_lock = threading.Lock()
         self._raw = self._load_config()
@@ -104,15 +113,25 @@ class McpManager:
         ).start()
 
     def _watch_tool_changes(self) -> None:
-        """收到 tools/list_changed 后重新拉取工具列表（不阻塞 API 请求）。"""
+        """收到 list_changed 后重新拉取列表（不阻塞 API 请求）。"""
         while not self._watch_stop.wait(2.0):
             for managed in list(self._processes.values()):
-                if not managed.client.tools_dirty:
-                    continue
-                try:
-                    managed.client.refresh_tools()
-                except Exception:  # noqa: BLE001
-                    pass
+                client = managed.client
+                if getattr(client, "tools_dirty", False):
+                    try:
+                        client.refresh_tools()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if getattr(client, "resources_dirty", False):
+                    try:
+                        client.refresh_resources()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if getattr(client, "prompts_dirty", False):
+                    try:
+                        client.refresh_prompts()
+                    except Exception:  # noqa: BLE001
+                        pass
 
     # ---------------------------------------------------------------- config
     def _load_config(self) -> dict:
@@ -284,7 +303,7 @@ class McpManager:
             if managed is None:
                 continue
             if not managed.client.alive:
-                tail = "；".join(managed.client.stderr_tail[-3:])
+                tail = "；".join(getattr(managed.client, "stderr_tail", [])[-3:])
                 self._set_failure(
                     server_id,
                     f"MCP 服务已退出{(': ' + tail) if tail else ''}",
@@ -413,6 +432,133 @@ class McpManager:
                 self._set_failure(target_id, f"MCP 启动失败: {exc}")
         return self._status(item)
 
+    def _remote_config(self, item: dict, server_id: str | None = None) -> RemoteMcpConfig:
+        target = server_id or str(item["id"])
+        headers = {
+            str(key): self._expand_env(
+                unprotect(str(value)), f"{target}.headers.{key}"
+            )
+            for key, value in (item.get("headers") or {}).items()
+        }
+        provider = StaticHeaderAuthProvider()
+        url = self._expand_env(str(item.get("url") or ""), f"{target}.url")
+        if not url.startswith(("http://", "https://")):
+            raise McpManagerError("远程 MCP 的 url 必须是 http/https")
+        return RemoteMcpConfig(
+            url=url,
+            transport=_transport(item),
+            headers=provider.prepare({"headers": headers}),
+            verify_tls=bool(item.get("verify_tls", True)),
+            timeout=float(item.get("timeout") or self.tool_timeout),
+            connect_timeout=self.startup_timeout,
+            sse_read_timeout=300.0,
+        )
+
+    def _normalize_remote_item(self, config: dict, target_id: str) -> dict:
+        url = str(config.get("url") or "").strip()
+        if not url:
+            raise McpManagerError("远程 MCP 缺少 url")
+        if "${" not in url and not url.startswith(("http://", "https://")):
+            raise McpManagerError("远程 MCP 的 url 必须是 http/https")
+        transport = str(config.get("transport") or "streamable-http").lower()
+        if transport not in _REMOTE_TRANSPORTS:
+            raise McpManagerError("远程 MCP transport 只能是 streamable-http 或 sse")
+        headers = {str(k): str(v) for k, v in (config.get("headers") or {}).items()}
+        secret_names = {
+            str(name).strip().lower()
+            for name in (config.get("secret_headers") or [])
+        }
+        stored_headers = {
+            key: protect(value) if _header_is_secret(key, secret_names) else value
+            for key, value in headers.items()
+        }
+        return {
+            "id": target_id,
+            "name": str(config.get("name") or target_id),
+            "enabled": True,
+            "transport": transport,
+            "url": url,
+            "headers": stored_headers,
+            "secret_headers": sorted(secret_names),
+            "verify_tls": bool(config.get("verify_tls", True)),
+            "timeout": float(config.get("timeout") or self.tool_timeout),
+            "permission": str(config.get("permission") or "ask"),
+        }
+
+    def add_remote_server(self, config: dict, background: bool = False) -> McpServerStatus:
+        target_id = str(config.get("id") or "").strip().lower()
+        if not _SERVER_ID.fullmatch(target_id):
+            raise McpManagerError("MCP server id 只能包含小写字母、数字、下划线和短横线")
+        if any(item.get("id") == target_id for item in self._servers()):
+            raise McpManagerError(f"MCP server 已存在: {target_id}")
+        item = self._normalize_remote_item(config, target_id)
+        if item["permission"] not in _VALID_PERMISSIONS:
+            raise McpManagerError("permission 只能是 auto、ask 或 deny")
+        self._raw.setdefault("servers", []).append(item)
+        self._save_config()
+        if background:
+            self._launch_in_background(target_id)
+        else:
+            try:
+                self._launch(target_id)
+            except (McpError, McpManagerError) as exc:
+                self._set_failure(target_id, f"MCP 启动失败: {exc}")
+        return self._status(item)
+
+    def test_remote_server(self, config: dict) -> dict:
+        item = self._normalize_remote_item(config, "test")
+        client = RemoteMcpClient(self._remote_config(item, "test"), server_name="test")
+        try:
+            client.start()
+            return {
+                "ok": True,
+                "transport": item["transport"],
+                "server_info": client.server_info,
+                "capabilities": client.capabilities,
+                "tools": len(client.tools),
+                "resources": len(client.resources),
+                "prompts": len(client.prompts),
+                "error": "",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "transport": item["transport"],
+                "server_info": {},
+                "capabilities": {},
+                "tools": 0,
+                "resources": 0,
+                "prompts": 0,
+                "error": _sanitize(str(exc)),
+            }
+        finally:
+            client.close()
+
+    def _remote_client(self, server_id: str) -> RemoteMcpClient:
+        managed = self._processes.get(server_id)
+        if managed is None or not isinstance(managed.client, RemoteMcpClient):
+            raise McpManagerError(f"MCP server 不是远程服务: {server_id}")
+        if not managed.client.alive:
+            raise McpError(f"MCP server 未就绪: {server_id}")
+        return managed.client
+
+    def list_resources(self, server_id: str) -> list[McpResource]:
+        return self._remote_client(server_id).list_resources()
+
+    def list_resource_templates(self, server_id: str) -> list[McpResourceTemplate]:
+        return self._remote_client(server_id).list_resource_templates()
+
+    def read_resource(self, server_id: str, uri: str) -> dict:
+        return self._remote_client(server_id).read_resource(uri)
+
+    def list_prompts(self, server_id: str) -> list[McpPrompt]:
+        return self._remote_client(server_id).list_prompts()
+
+    def get_prompt(
+        self, server_id: str, name: str, arguments: dict[str, str]
+    ) -> dict:
+        return self._remote_client(server_id).get_prompt(name, arguments)
+
     def remove_server(self, server_id: str) -> None:
         self._find(server_id)
         self._stop(server_id)
@@ -460,7 +606,7 @@ class McpManager:
         """返回某服务器已发现的工具规格。"""
         return list(self.client_for(server_id).tools)
 
-    def client_for(self, server_id: str) -> StdioMcpClient:
+    def client_for(self, server_id: str) -> McpClient:
         item = self._find(server_id)
         if not item.get("enabled", True):
             raise McpManagerError(f"MCP server 已禁用: {server_id}")
@@ -488,27 +634,33 @@ class McpManager:
         if existing is not None:
             self._stop(server_id)
 
-        command = [
-            self._expand_env(str(part), f"{server_id}.command")
-            for part in item["command"]
-        ]
-        cwd = (self.root / self._expand_env(str(item.get("cwd") or "."), f"{server_id}.cwd")).resolve()
-        if command and ("/" in command[0] or "\\" in command[0]):
-            command[0] = str((cwd / command[0]).resolve())
-        env = {
-            str(key): self._expand_env(
-                unprotect(str(value)), f"{server_id}.env.{key}"
+        transport = _transport(item)
+        if transport == "stdio":
+            command = [
+                self._expand_env(str(part), f"{server_id}.command")
+                for part in item["command"]
+            ]
+            cwd = (self.root / self._expand_env(str(item.get("cwd") or "."), f"{server_id}.cwd")).resolve()
+            if command and ("/" in command[0] or "\\" in command[0]):
+                command[0] = str((cwd / command[0]).resolve())
+            env = {
+                str(key): self._expand_env(
+                    unprotect(str(value)), f"{server_id}.env.{key}"
+                )
+                for key, value in (item.get("env") or {}).items()
+            }
+            client: McpClient = StdioMcpClient(
+                command,
+                cwd=cwd,
+                env={str(k): str(v) for k, v in env.items()},
+                startup_timeout=self.startup_timeout,
+                tool_timeout=self.tool_timeout,
+                server_name=server_id,
             )
-            for key, value in (item.get("env") or {}).items()
-        }
-        client = StdioMcpClient(
-            command,
-            cwd=cwd,
-            env={str(k): str(v) for k, v in env.items()},
-            startup_timeout=self.startup_timeout,
-            tool_timeout=self.tool_timeout,
-            server_name=server_id,
-        )
+        else:
+            client = RemoteMcpClient(
+                self._remote_config(item), server_name=server_id
+            )
         try:
             client.start()
             if len(client.tools) > self.max_tools:
@@ -516,7 +668,7 @@ class McpManager:
                     f"工具数 {len(client.tools)} 超过上限 {self.max_tools}"
                 )
         except Exception as exc:
-            tail = "；".join(client.stderr_tail[-3:])
+            tail = "；".join(getattr(client, "stderr_tail", [])[-3:])
             client.close()
             self._set_failure(
                 server_id,
@@ -524,9 +676,9 @@ class McpManager:
             )
             raise McpManagerError(f"MCP server 启动失败: {server_id}") from exc
 
-        self._processes[server_id] = ManagedProcess(
+        self._processes[server_id] = ManagedServer(
             client=client,
-            process=getattr(client, "_proc", None),
+            transport=transport,
             started_at=time.time(),
         )
         item.pop("last_error", None)
@@ -552,20 +704,31 @@ class McpManager:
     def _status(self, item: dict) -> McpServerStatus:
         server_id = str(item["id"])
         enabled = bool(item.get("enabled", True))
+        transport = _transport(item)
         managed = self._processes.get(server_id)
-        tool_names: list[str] = []
-        if managed is not None:
-            tool_names = [tool.name for tool in managed.client.tools]
+        client = managed.client if managed is not None else None
+        tool_names = [tool.name for tool in client.tools] if client is not None else []
+        capabilities = getattr(client, "capabilities", {}) if client is not None else {}
+        resources = getattr(client, "resources", []) if client is not None else []
+        prompts = getattr(client, "prompts", []) if client is not None else []
+        warnings = getattr(client, "warnings", []) if client is not None else []
+        server_info = getattr(client, "server_info", {}) if client is not None else {}
+        remote_state = getattr(client, "state", None) if client is not None else None
+        last_error = item.get("last_error")
         if not enabled:
             status = "disabled"
         elif server_id in self._starting:
             status = "starting"
-        elif managed is not None and managed.client.alive:
+        elif client is not None and client.alive:
             status = "running"
+        elif transport in _REMOTE_TRANSPORTS and remote_state in {"starting", "failed"}:
+            status = remote_state
         elif item.get("last_error"):
             status = "failed"
         else:
             status = "stopped"
+        if status == "failed" and last_error is None and warnings:
+            last_error = warnings[0]
         return McpServerStatus(
             id=server_id,
             name=str(item.get("name") or server_id),
@@ -574,5 +737,11 @@ class McpManager:
             permission=str(item.get("permission") or "ask"),
             tool_count=len(tool_names),
             tools=tool_names,
-            last_error=item.get("last_error"),
+            last_error=last_error,
+            transport=transport,
+            resource_count=len(resources),
+            prompt_count=len(prompts),
+            capabilities=dict(capabilities),
+            server_info=dict(server_info),
+            warnings=list(warnings),
         )
