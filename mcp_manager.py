@@ -505,6 +505,45 @@ class McpManager:
                 self._set_failure(target_id, f"MCP 启动失败: {exc}")
         return self._status(item)
 
+    def import_servers(self, entries: list[dict]) -> list[McpServerStatus]:
+        existing = {str(item.get("id")) for item in self._servers()}
+        items: list[dict] = []
+        for entry in entries:
+            target_id = str(entry.get("id") or "").strip().lower()
+            if not _SERVER_ID.fullmatch(target_id):
+                raise McpManagerError("MCP server id 不合法")
+            if target_id in existing:
+                raise McpManagerError(f"MCP server 已存在: {target_id}")
+            if entry.get("transport") == "stdio":
+                item = {
+                    "id": target_id,
+                    "name": str(entry.get("name") or target_id),
+                    "enabled": True,
+                    "transport": "stdio",
+                    "command": [str(part) for part in entry.get("command") or []],
+                    "cwd": str(entry.get("cwd") or "."),
+                    "env": {
+                        str(key): protect(str(value))
+                        if _looks_secret(str(key))
+                        else str(value)
+                        for key, value in (entry.get("env") or {}).items()
+                    },
+                    "permission": str(entry.get("permission") or "ask"),
+                }
+            else:
+                item = self._normalize_remote_item(entry, target_id)
+            if item["permission"] not in _VALID_PERMISSIONS:
+                raise McpManagerError("permission 只能是 auto、ask 或 deny")
+            existing.add(target_id)
+            items.append(item)
+        self._raw.setdefault("servers", []).extend(items)
+        self._save_config()
+        statuses = []
+        for item in items:
+            self._launch_in_background(item["id"])
+            statuses.append(self._status(item))
+        return statuses
+
     def test_remote_server(self, config: dict) -> dict:
         item = self._normalize_remote_item(config, "test")
         client = RemoteMcpClient(self._remote_config(item, "test"), server_name="test")
