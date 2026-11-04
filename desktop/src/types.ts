@@ -233,6 +233,8 @@ export interface KnowledgeProgress {
   indexed_documents: number;
   failed_documents: number;
   current_file: string;
+  embedded_chunks?: number;
+  total_chunks?: number;
   started_at: string;
   finished_at: string;
   message: string;

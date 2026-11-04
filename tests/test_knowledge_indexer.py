@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from knowledge_embed import EmbeddingStatus
 from knowledge_indexer import KnowledgeIndexer, _Cancelled
@@ -24,6 +25,25 @@ class FakeEmbedder:
 class CancelEmbedder(FakeEmbedder):
     def embed(self, texts):
         raise _Cancelled()
+
+
+class CountingEmbedder(FakeEmbedder):
+    def __init__(self):
+        self.calls = 0
+
+    def embed(self, texts):
+        self.calls += 1
+        return [[1.0, 0.0] for _ in texts]
+
+
+class RemovingEmbedder(FakeEmbedder):
+    def __init__(self, store, source_id):
+        self.store = store
+        self.source_id = source_id
+
+    def embed(self, texts):
+        self.store.remove_source(self.source_id)
+        return [[1.0, 0.0] for _ in texts]
 
 
 class IndexerTests(unittest.TestCase):
@@ -100,3 +120,36 @@ class IndexerTests(unittest.TestCase):
         state = self._wait()
 
         self.assertEqual(state["state"], "cancelled")
+
+    def test_oversized_document_is_skipped_before_embedding(self):
+        (self.source_dir / "huge.md").write_text(
+            "# 概述\n" + "内容。" * 2000, encoding="utf-8"
+        )
+        embedder = CountingEmbedder()
+        self.indexer = KnowledgeIndexer(self.store, embedder)
+        with patch("knowledge_indexer.MAX_CHUNKS_PER_DOCUMENT", 2):
+            self.indexer.start()
+            state = self._wait()
+
+        self.assertEqual(embedder.calls, 0)
+        self.assertEqual(self.store.count_chunks(), 0)
+        document = self.store.list_documents()[0]
+        self.assertEqual(document.status, "error")
+        self.assertIn("文件过大", document.error)
+        self.assertEqual(state["failed_documents"], 1)
+
+    def test_source_removed_during_embedding_stops_without_fk(self):
+        (self.source_dir / "a.md").write_text(
+            "# 概述\n" + "内容。" * 400, encoding="utf-8"
+        )
+        self.indexer = KnowledgeIndexer(
+            self.store, RemovingEmbedder(self.store, self.source.id)
+        )
+
+        self.indexer.start()
+        state = self._wait()
+
+        self.assertEqual(state["state"], "error")
+        self.assertIn("来源已被移除", state["message"])
+        self.assertEqual(self.store.count_documents(), 0)
+        self.assertEqual(self.store.count_chunks(), 0)

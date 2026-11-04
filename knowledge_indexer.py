@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -16,6 +17,8 @@ from knowledge_extract import chunk_units, discover_files, extract_units
 from knowledge_store import ChunkInsert, KnowledgeError, KnowledgeStore
 
 MAX_CHUNKS = 50_000
+# 单个文件的分块上限：避免超大 txt/导出文件在 CPU 上嵌入几个小时。
+MAX_CHUNKS_PER_DOCUMENT = 2_000
 
 
 class _Cancelled(Exception):
@@ -42,6 +45,8 @@ class IndexerProgress:
     indexed_documents: int = 0
     failed_documents: int = 0
     current_file: str = ""
+    embedded_chunks: int = 0
+    total_chunks: int = 0
     started_at: str = ""
     finished_at: str = ""
     message: str = ""
@@ -84,6 +89,12 @@ class KnowledgeIndexer:
     def cancel(self) -> None:
         self._cancel.set()
 
+    def wait(self, timeout: float = 10.0) -> bool:
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
+        return not self.is_running()
+
     def _update(self, **fields) -> None:
         with self._lock:
             for key, value in fields.items():
@@ -118,6 +129,11 @@ class KnowledgeIndexer:
                 absolute = str(path.resolve())
                 seen[source_id].add(absolute)
                 relative = path.relative_to(root).as_posix()
+                if self.store.get_source(source_id) is None:
+                    # 来源在扫描过程中被移除；不要再往已删除的来源写文档。
+                    processed += 1
+                    self._update(processed_files=processed)
+                    continue
                 try:
                     stat = path.stat()
                 except OSError:
@@ -147,6 +163,28 @@ class KnowledgeIndexer:
                 self._update(state="extracting", current_file=relative)
                 try:
                     drafts = chunk_units(extract_units(path))
+                    if len(drafts) > MAX_CHUNKS_PER_DOCUMENT:
+                        if self.store.get_source(source_id) is not None:
+                            self.store.mark_document_error(
+                                source_id,
+                                absolute,
+                                relative,
+                                stat.st_size,
+                                stat.st_mtime,
+                                digest,
+                                path.stem,
+                                (
+                                    f"文件过大：{len(drafts)} 段，超过单文件上限 "
+                                    f"{MAX_CHUNKS_PER_DOCUMENT}；请拆分文件后重试"
+                                ),
+                            )
+                        failed += 1
+                        processed += 1
+                        self._update(
+                            processed_files=processed,
+                            failed_documents=failed,
+                        )
+                        continue
                     if not drafts:
                         self.store.replace_document(
                             source_id,
@@ -174,7 +212,12 @@ class KnowledgeIndexer:
                         > MAX_CHUNKS
                     ):
                         raise KnowledgeError("知识库已达 5 万段上限")
-                    self._update(state="embedding", current_file=relative)
+                    self._update(
+                        state="embedding",
+                        current_file=relative,
+                        embedded_chunks=0,
+                        total_chunks=len(drafts),
+                    )
                     vectors: list[list[float]] = []
                     for start in range(0, len(drafts), 16):
                         if self._cancel.is_set():
@@ -183,6 +226,13 @@ class KnowledgeIndexer:
                         vectors.extend(
                             self.embedder.embed([draft.embed_text for draft in batch])
                         )
+                        self._update(
+                            embedded_chunks=min(start + len(batch), len(drafts))
+                        )
+                    if self._cancel.is_set():
+                        raise _Cancelled()
+                    if self.store.get_source(source_id) is None:
+                        raise KnowledgeError("来源已被移除，已停止索引")
                     if len(vectors) != len(drafts):
                         raise EmbeddingError("嵌入数量与分块数量不一致")
                     dim = len(vectors[0])
@@ -218,18 +268,22 @@ class KnowledgeIndexer:
                     raise
                 except KnowledgeError:
                     raise
+                except sqlite3.IntegrityError as exc:
+                    # 来源在嵌入期间被移除：停止本轮，避免把原始 FK 错误暴露给界面。
+                    raise KnowledgeError("来源已被移除或数据库约束失败，已停止索引") from exc
                 except Exception as exc:  # noqa: BLE001
                     failed += 1
-                    self.store.mark_document_error(
-                        source_id,
-                        absolute,
-                        relative,
-                        stat.st_size,
-                        stat.st_mtime,
-                        digest,
-                        path.stem,
-                        str(exc),
-                    )
+                    if self.store.get_source(source_id) is not None:
+                        self.store.mark_document_error(
+                            source_id,
+                            absolute,
+                            relative,
+                            stat.st_size,
+                            stat.st_mtime,
+                            digest,
+                            path.stem,
+                            str(exc),
+                        )
                 processed += 1
                 self._update(
                     processed_files=processed,

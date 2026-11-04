@@ -133,7 +133,8 @@ export function KnowledgePanel() {
           <button
             type="button"
             className="danger"
-            disabled={busy}
+            disabled={busy || status.indexing}
+            title={status.indexing ? "索引进行中，先取消再移除" : undefined}
             onClick={() => {
               if (!window.confirm(`移除 ${source.path}？`)) return;
               void run(() => removeKnowledgeSource(source.id));
@@ -151,6 +152,9 @@ export function KnowledgePanel() {
           </div>
           <div className="knowledge-progress-text">
             {progress.current_file || "准备中"} · {done}/{total} 个文件
+            {progress.total_chunks
+              ? ` · 已嵌入 ${progress.embedded_chunks ?? 0}/${progress.total_chunks} 块`
+              : ""}
           </div>
         </div>
       )}

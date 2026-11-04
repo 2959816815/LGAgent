@@ -53,6 +53,8 @@ class KnowledgeService:
                 "indexed_documents": progress["indexed_documents"],
                 "failed_documents": progress["failed_documents"],
                 "current_file": progress["current_file"],
+                "embedded_chunks": progress["embedded_chunks"],
+                "total_chunks": progress["total_chunks"],
                 "started_at": progress["started_at"],
                 "finished_at": progress["finished_at"],
                 "message": progress["message"],
@@ -79,12 +81,25 @@ class KnowledgeService:
         }
 
     def add_source(self, path: str) -> dict[str, Any]:
+        if self.indexer.is_running():
+            self.indexer.cancel()
+            self.indexer.wait(timeout=10.0)
         self.store.add_source(path)
-        self.indexer.start(rebuild=False)
+        if not self.indexer.is_running():
+            self.indexer.start(rebuild=False)
         return self.status()
 
     def remove_source(self, source_id: int) -> dict[str, Any]:
+        if self.indexer.is_running():
+            self.indexer.cancel()
+            self.indexer.wait(timeout=10.0)
         self.store.remove_source(source_id)
+        if (
+            self.store.enabled
+            and self.store.list_sources()
+            and not self.indexer.is_running()
+        ):
+            self.indexer.start(rebuild=False)
         return self.status()
 
     def start_index(self, rebuild: bool = False) -> dict[str, Any]:
