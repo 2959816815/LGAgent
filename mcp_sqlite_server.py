@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -38,14 +40,19 @@ def _db_path() -> Path:
     return path
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     path = _db_path()
     if not path.is_file():
         raise ValueError(f"数据库不存在: {path}")
     # mode=ro guarantees this server never writes, even if a query is crafted.
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _format_rows(columns: list[str], rows: list[sqlite3.Row], total: int) -> str:
