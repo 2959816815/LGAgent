@@ -93,6 +93,11 @@ describe("App", () => {
     expect(await screen.findByText("LangGraph Agent")).toBeTruthy();
   });
 
+  it("shows the app version next to the brand", async () => {
+    render(<App />);
+    expect(await screen.findByText(`v${__APP_VERSION__}`)).toBeTruthy();
+  });
+
   it("regenerates the last assistant reply", async () => {
     render(<App />);
 

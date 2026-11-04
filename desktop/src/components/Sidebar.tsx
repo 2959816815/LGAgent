@@ -44,7 +44,8 @@ export function Sidebar(props: {
     <aside className="sidebar">
       <div className="brand">
         <span className="brand-dot">◆</span>
-        <span>LangGraph Agent</span>
+        <span className="brand-name">LangGraph Agent</span>
+        <span className="brand-version">v{__APP_VERSION__}</span>
       </div>
       <button className="new-session" onClick={props.onNew}>
         ＋ 新会话

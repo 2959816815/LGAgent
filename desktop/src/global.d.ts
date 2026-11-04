@@ -1,3 +1,5 @@
+declare const __APP_VERSION__: string;
+
 interface DesktopConfig {
   baseUrl: string;
   token: string;
