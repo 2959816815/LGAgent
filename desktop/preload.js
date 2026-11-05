@@ -14,4 +14,13 @@ contextBridge.exposeInMainWorld("desktop", {
   exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
   pickFolder: () => ipcRenderer.invoke("desktop:pick-folder"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  getUpdateStatus: () => ipcRenderer.invoke("desktop:update-status"),
+  checkForUpdates: () => ipcRenderer.invoke("desktop:check-for-updates"),
+  openReleases: () => ipcRenderer.invoke("desktop:open-releases"),
+  installUpdate: () => ipcRenderer.invoke("desktop:install-update"),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("desktop:update-status", listener);
+    return () => ipcRenderer.removeListener("desktop:update-status", listener);
+  },
 });

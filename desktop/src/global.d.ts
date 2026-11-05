@@ -65,5 +65,28 @@ interface Window {
     exportDiagnostics(): Promise<string | null>;
     pickFolder?(): Promise<string | null>;
     getPathForFile(file: File): string;
+    getUpdateStatus?(): Promise<DesktopUpdateStatus>;
+    checkForUpdates?(): Promise<DesktopUpdateStatus>;
+    openReleases?(): Promise<boolean>;
+    installUpdate?(): Promise<DesktopUpdateStatus>;
+    onUpdateStatus?(callback: (status: DesktopUpdateStatus) => void): () => void;
   };
+}
+
+interface DesktopUpdateStatus {
+  status:
+    | "idle"
+    | "checking"
+    | "current"
+    | "downloading"
+    | "downloaded"
+    | "stalled"
+    | "error"
+    | "unavailable";
+  version: string;
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+  message: string;
 }

@@ -640,12 +640,85 @@ async function createWindowWithRetry() {
   }
 }
 
+const RELEASES_URL = "https://github.com/2959816815/LGAgent/releases/latest";
+const UPDATE_INTERVAL_MS = 60 * 60 * 1000;
+const UPDATE_STALL_MS = 90 * 1000;
+
+let updateStatus = {
+  status: "idle",
+  version: "",
+  percent: 0,
+  transferred: 0,
+  total: 0,
+  bytesPerSecond: 0,
+  message: "",
+};
+let updateCheckTimer = null;
+let updateWatchdog = null;
+let lastProgressAt = 0;
+let manualUpdateCheck = false;
+
+function pushUpdateStatus(patch = {}) {
+  updateStatus = { ...updateStatus, ...patch };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("desktop:update-status", updateStatus);
+  }
+}
+
+function openReleasesPage() {
+  shell.openExternal(RELEASES_URL).catch((error) => bootLog("open releases failed", error));
+}
+
 function setupAutoUpdater() {
   if (!app.isPackaged) return;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on("error", (error) => bootLog("autoUpdater error", error));
+  autoUpdater.on("error", (error) => {
+    bootLog("autoUpdater error", error);
+    // 卡住后主动取消会触发 CancellationError，不要覆盖“已暂停”提示。
+    if (updateStatus.status === "stalled") return;
+    const message = String(error?.message ?? error);
+    if (!manualUpdateCheck && updateStatus.status === "checking") {
+      pushUpdateStatus({ status: "idle", message });
+    } else {
+      pushUpdateStatus({ status: "error", message });
+    }
+    manualUpdateCheck = false;
+  });
+  autoUpdater.on("update-available", (info) => {
+    bootLog(`autoUpdater available ${info.version}`);
+    manualUpdateCheck = false;
+    lastProgressAt = Date.now();
+    pushUpdateStatus({
+      status: "downloading",
+      version: info.version,
+      percent: 0,
+      transferred: 0,
+      total: 0,
+      bytesPerSecond: 0,
+      message: "",
+    });
+  });
+  autoUpdater.on("update-not-available", () => {
+    pushUpdateStatus(
+      manualUpdateCheck
+        ? { status: "current", message: "已是最新版本" }
+        : { status: "idle" },
+    );
+    manualUpdateCheck = false;
+  });
+  autoUpdater.on("download-progress", (info) => {
+    lastProgressAt = Date.now();
+    pushUpdateStatus({
+      status: "downloading",
+      percent: Number(info.percent) || 0,
+      transferred: Number(info.transferred) || 0,
+      total: Number(info.total) || 0,
+      bytesPerSecond: Number(info.bytesPerSecond) || 0,
+    });
+  });
   autoUpdater.on("update-downloaded", async (info) => {
+    pushUpdateStatus({ status: "downloaded", version: info.version, percent: 100 });
     const options = {
       type: "info",
       title: "更新已下载",
@@ -667,13 +740,73 @@ function setupAutoUpdater() {
       bootLog("autoUpdater dialog failed", error);
     }
   });
-  const timer = setTimeout(() => {
+
+  const check = () => {
+    if (
+      updateStatus.status === "downloading" ||
+      updateStatus.status === "downloaded" ||
+      updateStatus.status === "stalled"
+    ) {
+      return;
+    }
+    if (!manualUpdateCheck) pushUpdateStatus({ status: "checking", message: "正在检查更新" });
     autoUpdater.checkForUpdatesAndNotify().catch((error) => {
       bootLog("autoUpdater check failed", error);
     });
+  };
+
+  // 下载卡住（90 秒没有任何进度）时主动取消并提示，而不是无限静默等待。
+  updateWatchdog = setInterval(() => {
+    if (updateStatus.status !== "downloading") return;
+    if (Date.now() - lastProgressAt < UPDATE_STALL_MS) return;
+    pushUpdateStatus({
+      status: "stalled",
+      message: "下载速度过慢或网络中断，已暂停自动更新",
+    });
+    try {
+      autoUpdater.cancellationToken.cancel();
+    } catch (error) {
+      bootLog("autoUpdater cancel failed", error);
+    }
   }, 5000);
+  if (typeof updateWatchdog.unref === "function") updateWatchdog.unref();
+
+  const timer = setTimeout(check, 5000);
   if (typeof timer.unref === "function") timer.unref();
+  updateCheckTimer = setInterval(check, UPDATE_INTERVAL_MS);
+  if (typeof updateCheckTimer.unref === "function") updateCheckTimer.unref();
 }
+
+ipcMain.handle("desktop:update-status", () => updateStatus);
+
+ipcMain.handle("desktop:check-for-updates", async () => {
+  if (!app.isPackaged) {
+    return { ...updateStatus, status: "unavailable", message: "开发模式不支持自动更新" };
+  }
+  if (updateStatus.status === "downloading" || updateStatus.status === "downloaded") {
+    return updateStatus;
+  }
+  manualUpdateCheck = true;
+  pushUpdateStatus({ status: "checking", message: "正在检查更新" });
+  try {
+    await autoUpdater.checkForUpdatesAndNotify();
+  } catch (error) {
+    bootLog("autoUpdater manual check failed", error);
+    manualUpdateCheck = false;
+    pushUpdateStatus({ status: "error", message: String(error?.message ?? error) });
+  }
+  return updateStatus;
+});
+
+ipcMain.handle("desktop:open-releases", async () => {
+  openReleasesPage();
+  return true;
+});
+
+ipcMain.handle("desktop:install-update", () => {
+  if (updateStatus.status === "downloaded") autoUpdater.quitAndInstall();
+  return updateStatus;
+});
 
 app.whenReady().then(async () => {
   bootLog("app ready");

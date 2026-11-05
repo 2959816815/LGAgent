@@ -109,6 +109,24 @@ describe("App", () => {
     expect(await screen.findByText(`v${__APP_VERSION__}`)).toBeTruthy();
   });
 
+  it("shows update download progress", async () => {
+    window.desktop = {
+      ...window.desktop!,
+      getUpdateStatus: async () => ({
+        status: "downloading" as const,
+        version: "0.2.4",
+        percent: 42,
+        transferred: 70 * 1024 * 1024,
+        total: 179 * 1024 * 1024,
+        bytesPerSecond: 1024,
+        message: "",
+      }),
+    };
+    render(<App />);
+    expect(await screen.findByText(/正在下载 v0\.2\.4/)).toBeTruthy();
+    expect(screen.getByText("手动下载")).toBeTruthy();
+  });
+
   it("cancels a stale run and retries once on 409", async () => {
     const callsBefore = vi.mocked(streamMessage).mock.calls.length;
     const { ApiError } = await import("./api");

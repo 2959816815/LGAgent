@@ -279,3 +279,23 @@ export interface KnowledgeSearchResponse {
   results: KnowledgeSearchResult[];
   reason: string;
 }
+
+export type UpdateStatusKind =
+  | "idle"
+  | "checking"
+  | "current"
+  | "downloading"
+  | "downloaded"
+  | "stalled"
+  | "error"
+  | "unavailable";
+
+export interface UpdateStatus {
+  status: UpdateStatusKind;
+  version: string;
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+  message: string;
+}

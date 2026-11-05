@@ -13,6 +13,7 @@ export function Sidebar(props: {
   onNew: () => void;
   onDelete: (id: string) => void;
   onSettings: () => void;
+  onCheckUpdates: () => void;
 }) {
   const [hits, setHits] = useState<SessionSearchResult[]>([]);
   useEffect(() => {
@@ -45,7 +46,14 @@ export function Sidebar(props: {
       <div className="brand">
         <span className="brand-dot">◆</span>
         <span className="brand-name">LangGraph Agent</span>
-        <span className="brand-version">v{__APP_VERSION__}</span>
+        <button
+          type="button"
+          className="brand-version"
+          title="检查更新"
+          onClick={props.onCheckUpdates}
+        >
+          v{__APP_VERSION__}
+        </button>
       </div>
       <button className="new-session" onClick={props.onNew}>
         ＋ 新会话

@@ -50,6 +50,7 @@ import type {
   SessionDetail,
   SessionMeta,
   ToolEvent,
+  UpdateStatus,
 } from "./types";
 
 const HISTORY_PAGE = 200;
@@ -88,6 +89,7 @@ export function App() {
     hasMore: false,
     nextBefore: null,
   });
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamSeq = useRef(0);
   const viewSeq = useRef(0);
@@ -522,6 +524,48 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const desktop = window.desktop;
+    if (!desktop?.getUpdateStatus) return;
+    let alive = true;
+    desktop
+      .getUpdateStatus()
+      .then((status) => {
+        if (alive) setUpdate(status as UpdateStatus);
+      })
+      .catch(() => undefined);
+    const unsubscribe = desktop.onUpdateStatus?.((status) => {
+      if (alive) setUpdate(status as UpdateStatus);
+    });
+    return () => {
+      alive = false;
+      unsubscribe?.();
+    };
+  }, []);
+
+  async function checkUpdates(): Promise<void> {
+    const desktop = window.desktop;
+    if (!desktop?.checkForUpdates) return;
+    try {
+      const status = await desktop.checkForUpdates();
+      setUpdate(status as UpdateStatus);
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  }
+
+  function formatBytes(value: number): string {
+    if (!value) return "0 B";
+    const units = ["B", "KB", "MB", "GB"];
+    let size = value;
+    let unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit += 1;
+    }
+    return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+  }
+
+  useEffect(() => {
     void loadAgents();
     const timer = window.setInterval(() => void loadAgents(), 2000);
     return () => window.clearInterval(timer);
@@ -575,6 +619,7 @@ export function App() {
         onNew={() => void newSession()}
         onDelete={(id) => void removeSession(id)}
         onSettings={() => setSettingsOpen(true)}
+        onCheckUpdates={() => void checkUpdates()}
       />
       <Chat
         session={detail}
@@ -652,6 +697,43 @@ export function App() {
             })();
           }}
         />
+      )}
+      {update && update.status !== "idle" && (
+        <div className={`update-toast update-${update.status}`}>
+          <span className="update-text">
+            {update.status === "checking" && "正在检查更新…"}
+            {update.status === "current" && "已是最新版本"}
+            {update.status === "unavailable" && update.message}
+            {update.status === "downloading" &&
+              `正在下载 v${update.version}：${Math.round(update.percent)}%（${formatBytes(update.transferred)} / ${formatBytes(update.total)}）`}
+            {update.status === "downloaded" &&
+              `v${update.version} 已下载，重启后安装`}
+            {update.status === "stalled" &&
+              `自动更新已暂停：${update.message}`}
+            {update.status === "error" && `自动更新失败：${update.message}`}
+          </span>
+          {update.status === "downloading" && (
+            <button onClick={() => void window.desktop?.openReleases?.()}>
+              手动下载
+            </button>
+          )}
+          {(update.status === "stalled" || update.status === "error") && (
+            <>
+              <button onClick={() => void checkUpdates()}>重试</button>
+              <button onClick={() => void window.desktop?.openReleases?.()}>
+                手动下载
+              </button>
+            </>
+          )}
+          {update.status === "downloaded" && (
+            <button onClick={() => void window.desktop?.installUpdate?.()}>
+              立即重启
+            </button>
+          )}
+          {(update.status === "current" || update.status === "unavailable") && (
+            <button onClick={() => setUpdate(null)}>知道了</button>
+          )}
+        </div>
       )}
     </div>
   );
