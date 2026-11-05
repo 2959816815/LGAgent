@@ -112,6 +112,31 @@ describe("streamMessage", () => {
     expect(bodies[0]).toEqual({ text: "", attachments: [], mode: "regenerate" });
     expect(bodies[1]).toEqual({ text: "改后的问题", attachments: [], edit_index: 2 });
   });
+
+  it("exposes the active run id from a 409 response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            detail: { message: "已有回复正在生成", run_id: "run-abc123" },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const signal = new AbortController().signal;
+
+    await expect(async () => {
+      for await (const _ of streamMessage("s1", "你好", signal)) {
+        // drain
+      }
+    }).rejects.toMatchObject({
+      message: "已有回复正在生成",
+      status: 409,
+      runId: "run-abc123",
+    });
+  });
 });
 
 describe("cancelAgent", () => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   addMcpServer,
   addRemoteMcpServer,
+  ApiError,
   cancelAgent,
   cancelRun,
   compactSession,
@@ -304,12 +305,15 @@ export function App() {
     setTools([]);
     const controller = new AbortController();
     abortRef.current = controller;
+    let retried = false;
     try {
-      for await (const event of streamMessage(sessionId, text, controller.signal, outgoing, {
-        mode: options.mode,
-        editIndex: options.editIndex,
-      })) {
-        if (seq !== streamSeq.current) break;
+      for (;;) {
+        try {
+          for await (const event of streamMessage(sessionId, text, controller.signal, outgoing, {
+            mode: options.mode,
+            editIndex: options.editIndex,
+          })) {
+            if (seq !== streamSeq.current) break;
         if (event.event === "token") {
           const id = String(event.data.run_id ?? "");
           if (id) setRunId(id);
@@ -351,6 +355,23 @@ export function App() {
           setTools([]);
         } else if (event.event === "error") {
           setError(String(event.data.message ?? "模型调用失败"));
+        }
+          }
+          break;
+        } catch (cause) {
+          if (
+            !retried &&
+            seq === streamSeq.current &&
+            cause instanceof ApiError &&
+            cause.status === 409 &&
+            cause.runId
+          ) {
+            // 上一次生成是残留状态：取消它并自动重试一次。
+            retried = true;
+            await cancelRun(cause.runId).catch(() => undefined);
+            continue;
+          }
+          throw cause;
         }
       }
     } catch (cause) {

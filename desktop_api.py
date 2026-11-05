@@ -331,6 +331,11 @@ def create_app(
             self.cancel = threading.Event()
             self.events: queue.Queue = queue.Queue()
             self.broker: ApprovalBroker | None = None
+            self.thread: threading.Thread | None = None
+
+    def run_is_dead(run: RunState) -> bool:
+        """线程已经结束但还没清掉 active_runs 时，视为残留。"""
+        return run.thread is not None and not run.thread.is_alive()
 
     runs: dict[str, RunState] = {}
     undo_entries: dict[str, list[UndoEntry]] = {}
@@ -540,6 +545,9 @@ def create_app(
                     raise RuntimeError(
                         f"云端连接失败（{exc}）；本地模型重试也失败（{local_exc}）"
                     ) from local_exc
+            if run.cancel.is_set():
+                # 用户已取消：放弃这次结果，避免和新一轮生成同时写会话。
+                return
             session.messages.extend(dehydrate_messages(new_messages, attachment_store))
             store.save(session)
         except Exception as exc:
@@ -823,8 +831,19 @@ def create_app(
             raise HTTPException(status_code=400, detail="消息不能为空")
 
         with runs_lock:
-            if session_id in active_runs:
-                raise HTTPException(status_code=409, detail="已有回复正在生成")
+            existing_id = active_runs.get(session_id)
+            if existing_id is not None:
+                existing = runs.get(existing_id)
+                if existing is None or run_is_dead(existing):
+                    # 残留的 run：线程已结束但 finally 还没来得及（或没能）清理。
+                    active_runs.pop(session_id, None)
+                    if existing is not None:
+                        runs.pop(existing_id, None)
+                else:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"message": "已有回复正在生成", "run_id": existing_id},
+                    )
             try:
                 session = store.load(session_id)
             except SessionStoreError as exc:
@@ -875,10 +894,19 @@ def create_app(
                     session.title = (text or "图片对话")[:30]
             store.save(session)
             run = RunState(f"run-{uuid.uuid4().hex[:8]}", session_id)
+            run.thread = threading.Thread(
+                target=run_graph, args=(run, session, text), daemon=True
+            )
             runs[run.run_id] = run
             active_runs[session_id] = run.run_id
-        thread = threading.Thread(target=run_graph, args=(run, session, text), daemon=True)
-        thread.start()
+        try:
+            run.thread.start()
+        except RuntimeError as exc:
+            with runs_lock:
+                runs.pop(run.run_id, None)
+                if active_runs.get(session_id) == run.run_id:
+                    active_runs.pop(session_id, None)
+            raise HTTPException(status_code=500, detail=f"无法启动生成线程: {exc}") from exc
 
         def event_stream():
             try:
@@ -961,6 +989,9 @@ def create_app(
         run.cancel.set()
         if run.broker is not None:
             run.broker.cancel_all()
+        with runs_lock:
+            if active_runs.get(run.session_id) == run_id:
+                active_runs.pop(run.session_id, None)
         return {"cancelled": run_id}
 
     @app.post("/api/runs/{run_id}/approvals/{approval_id}", dependencies=[Depends(require_token)])

@@ -38,20 +38,49 @@ function headers(): Record<string, string> {
   return result;
 }
 
+export class ApiError extends Error {
+  status: number;
+  runId?: string;
+
+  constructor(message: string, status: number, runId?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.runId = runId;
+  }
+}
+
+async function toApiError(response: Response): Promise<ApiError> {
+  let detail: unknown = response.statusText;
+  try {
+    const body = await response.json();
+    detail = body.detail ?? detail;
+  } catch {
+    // keep status text
+  }
+  let message = response.statusText || `HTTP ${response.status}`;
+  let runId: string | undefined;
+  if (typeof detail === "string" && detail) {
+    message = detail;
+  } else if (detail && typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message) {
+      message = record.message;
+    }
+    if (typeof record.run_id === "string" && record.run_id) {
+      runId = record.run_id;
+    }
+  }
+  return new ApiError(message, response.status, runId);
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: { ...headers(), ...(init.headers || {}) },
   });
   if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      detail = body.detail || detail;
-    } catch {
-      // keep status text
-    }
-    throw new Error(detail);
+    throw await toApiError(response);
   }
   return response.json() as Promise<T>;
 }
@@ -297,14 +326,7 @@ export async function* streamMessage(
     signal,
   });
   if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      detail = body.detail || detail;
-    } catch {
-      // keep status text
-    }
-    throw new Error(detail);
+    throw await toApiError(response);
   }
   if (!response.body) throw new Error("服务端没有返回流");
   const reader = response.body.getReader();

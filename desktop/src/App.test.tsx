@@ -16,7 +16,17 @@ vi.mock("./api", () => {
       { role: "assistant", content: "原始回答" },
     ],
   };
+  class ApiError extends Error {
+    status: number;
+    runId?: string;
+    constructor(message: string, status: number, runId?: string) {
+      super(message);
+      this.status = status;
+      this.runId = runId;
+    }
+  }
   return {
+    ApiError,
     initApi: vi.fn(async () => undefined),
     listSessions: vi.fn(async () => [detail]),
     listModels: vi.fn(async () => [
@@ -33,7 +43,7 @@ vi.mock("./api", () => {
       // 空流：测试只关心调用参数
     }),
     compactSession: vi.fn(async () => detail),
-    cancelRun: vi.fn(),
+    cancelRun: vi.fn(async () => undefined),
     getModelHealth: vi.fn(async () => ({ key: "deepseek", reachable: true })),
     addRemoteMcpServer: vi.fn(async () => undefined),
     testMcpServer: vi.fn(async () => ({
@@ -61,6 +71,7 @@ vi.mock("./api", () => {
 
 import { App } from "./App";
 import {
+  cancelRun,
   compactSession,
   getModelHealth,
   getSession,
@@ -96,6 +107,31 @@ describe("App", () => {
   it("shows the app version next to the brand", async () => {
     render(<App />);
     expect(await screen.findByText(`v${__APP_VERSION__}`)).toBeTruthy();
+  });
+
+  it("cancels a stale run and retries once on 409", async () => {
+    const callsBefore = vi.mocked(streamMessage).mock.calls.length;
+    const { ApiError } = await import("./api");
+    vi.mocked(streamMessage)
+      .mockImplementationOnce(async function* () {
+        throw new ApiError("已有回复正在生成", 409, "run-old");
+      })
+      .mockImplementationOnce(async function* () {
+        yield { event: "token", data: { run_id: "run-new", text: "重试" } };
+        yield { event: "done", data: {} };
+      });
+
+    render(<App />);
+    const input = await screen.findByPlaceholderText(/输入消息/);
+    fireEvent.change(input, { target: { value: "你好" } });
+    fireEvent.click(screen.getByText("发送"));
+
+    await waitFor(() => expect(cancelRun).toHaveBeenCalledWith("run-old"));
+    await waitFor(() =>
+      expect(vi.mocked(streamMessage).mock.calls.length).toBeGreaterThanOrEqual(
+        callsBefore + 2,
+      ),
+    );
   });
 
   it("regenerates the last assistant reply", async () => {

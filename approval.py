@@ -166,7 +166,7 @@ class ApprovalBroker:
         session_id: str,
         emit: Callable[[str, dict], None],
         undo_entries: list[UndoEntry] | None = None,
-        timeout: float = 300.0,
+        timeout: float = 120.0,
     ):
         self.run_id = run_id
         self.session_id = session_id

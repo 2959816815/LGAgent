@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -333,6 +334,17 @@ class BlockingGraph:
         self.release.wait(timeout=2)
 
 
+class HangingGraph:
+    """一直挂起，直到测试显式 release；用于验证残留 run 的处理。"""
+
+    def __init__(self, release):
+        self.release = release
+
+    def stream(self, *args, **kwargs):
+        yield ("messages", (FakeChunk(content="等"), {}))
+        self.release.wait()
+
+
 class EchoGraph:
     """把输入消息原样带回，方便断言重生成/编辑后的会话内容。"""
 
@@ -618,6 +630,58 @@ class StreamingApiTests(unittest.TestCase):
             headers=self.headers,
         )
         self.assertEqual(second.status_code, 200)
+
+    def test_409_includes_run_id_and_cancel_unlocks_session(self):
+        release = threading.Event()
+        app = create_app(
+            root=self.root,
+            token="t",
+            graph_builder=lambda manager, model_key, extra_tools=None: HangingGraph(release),
+        )
+        client = TestClient(app)
+        # 第二个客户端用于在第一条流未结束时并发发请求。
+        client2 = TestClient(app)
+        self.addCleanup(release.set)
+        session = client.post(
+            "/api/sessions", json={"title": "取消"}, headers=self.headers
+        ).json()
+        # TestClient 会缓冲整个流，所以第一条请求放到后台线程里跑，
+        # 主线程趁它还没结束时发第二条。
+        first_result = {}
+
+        def first_request() -> None:
+            first_result["response"] = client.post(
+                f"/api/sessions/{session['id']}/messages",
+                json={"text": "第一条"},
+                headers=self.headers,
+            )
+
+        thread = threading.Thread(target=first_request, daemon=True)
+        thread.start()
+        time.sleep(0.5)
+
+        blocked = client2.post(
+            f"/api/sessions/{session['id']}/messages",
+            json={"text": "第二条"},
+            headers=self.headers,
+        )
+        self.assertEqual(blocked.status_code, 409)
+        run_id = blocked.json()["detail"]["run_id"]
+        self.assertTrue(run_id)
+
+        cancelled = client2.post(f"/api/runs/{run_id}/cancel", headers=self.headers)
+        self.assertEqual(cancelled.status_code, 200)
+
+        # 取消后同一会话应立刻可以继续发，不必等旧线程退出。
+        release.set()
+        second = client2.post(
+            f"/api/sessions/{session['id']}/messages",
+            json={"text": "第三条"},
+            headers=self.headers,
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        thread.join(timeout=5)
+        self.assertEqual(first_result["response"].status_code, 200)
 
     def test_image_is_rejected_for_local_model(self):
         session = self.client.post(
