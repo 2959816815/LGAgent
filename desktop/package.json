@@ -1,7 +1,7 @@
 {
   "name": "langgraph-agent",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "LangGraph desktop agent with local file, Office, web and subagent tools",
   "author": "LangGraph Agent",
   "main": "main.js",
