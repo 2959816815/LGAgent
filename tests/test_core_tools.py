@@ -16,7 +16,7 @@ class CoreToolTests(unittest.TestCase):
             names, set(CORE_TOOL_NAMES) - {"search_knowledge_base"}
         )
         self.assertIn("read_file", names)
-        self.assertNotIn("read_docx", names)
+        self.assertIn("read_docx", names)
 
     def test_cloud_model_gets_all_builtin_tools(self):
         tools = collect_tools(model_key="deepseek")

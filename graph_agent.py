@@ -212,6 +212,20 @@ def _load_text_file(path: Path) -> tuple[str, int, int]:
         raw = handle.read(_MAX_READ_BYTES)
 
     if b"\x00" in raw[:_MAX_BINARY_CHECK_BYTES]:
+        hint = {
+            ".docx": "read_docx",
+            ".xlsx": "read_xlsx",
+            ".pptx": "read_pptx",
+            ".pdf": "read_pdf",
+        }.get(path.suffix.lower())
+        if hint:
+            raise ValueError(
+                f"这是二进制文件，read_file 不支持读取: {path}。请改用 {hint}。"
+            )
+        if path.suffix.lower() == ".doc":
+            raise ValueError(
+                f"旧版 .doc 是二进制格式，暂不支持读取: {path}。请先另存为 .docx。"
+            )
         raise ValueError(f"这是二进制文件，暂不支持读取: {path}")
 
     return _decode(raw), size, len(raw)
@@ -530,7 +544,8 @@ def get_current_time() -> str:
 def read_file(path: str, max_chars: int = 20000, offset: int = 0) -> str:
     """读取文本文件并返回内容；如果 path 是目录，则返回目录中的文件和子目录列表。
 
-    支持绝对路径、相对路径、~ 和环境变量。只支持文本文件。
+    支持绝对路径、相对路径、~ 和环境变量。只支持文本文件；
+    Word 用 read_docx，Excel 用 read_xlsx，PPT 用 read_pptx，PDF 用 read_pdf。
     大文件可用 offset（起始字符位置，从 0 开始）和 max_chars 分页读取。
     """
     raw_path = (path or "").strip().strip('"').strip("'")
@@ -769,6 +784,7 @@ CORE_TOOL_NAMES = frozenset(
         "download_file",
         "read_csv",
         "read_json",
+        "read_docx",
         "read_pdf",
         "search_knowledge_base",
     }
