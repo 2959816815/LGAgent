@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langgraph.errors import GraphRecursionError
 
 from desktop_api import _as_bool, _message_json, create_app
 from knowledge_service import KnowledgeService
@@ -345,6 +346,14 @@ class HangingGraph:
         self.release.wait()
 
 
+class RecursionGraph:
+    """模拟图步数超限。"""
+
+    def stream(self, *args, **kwargs):
+        raise GraphRecursionError("Recursion limit of 60 reached without hitting a stop condition.")
+        yield  # pragma: no cover
+
+
 class EchoGraph:
     """把输入消息原样带回，方便断言重生成/编辑后的会话内容。"""
 
@@ -630,6 +639,26 @@ class StreamingApiTests(unittest.TestCase):
             headers=self.headers,
         )
         self.assertEqual(second.status_code, 200)
+
+    def test_recursion_limit_returns_actionable_error(self):
+        app = create_app(
+            root=self.root,
+            token="t",
+            graph_builder=lambda manager, model_key, extra_tools=None: RecursionGraph(),
+        )
+        client = TestClient(app)
+        session = client.post(
+            "/api/sessions", json={"title": "步数超限"}, headers=self.headers
+        ).json()
+        response = client.post(
+            f"/api/sessions/{session['id']}/messages",
+            json={"text": "复杂任务"},
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: error", response.text)
+        self.assertIn("步仍未完成", response.text)
+        self.assertIn("拆成更小的步骤", response.text)
 
     def test_409_includes_run_id_and_cancel_unlocks_session(self):
         release = threading.Event()

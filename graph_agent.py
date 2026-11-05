@@ -43,6 +43,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
@@ -114,6 +115,7 @@ SYSTEM_PROMPT = (
     "修改已有办公文件前先用对应的 read_* 工具确认原文；"
     "写入或修改完成后，只报告文件路径和完成状态，不要复述写入或修改的内容；"
     "路径优先使用绝对路径；工具返回错误时如实说明，不要猜测文件内容。"
+    "同一工具在相同参数下连续失败两次后，不要原样重试，应换方法或如实说明。"
 )
 
 SYSTEM_PROMPT += (
@@ -129,6 +131,10 @@ SYSTEM_PROMPT += (
     "在设置 → 知识库中添加文件夹。使用知识库内容回答时，"
     "在相应句子后标注“来源: 路径”。"
 )
+
+# 单轮对话允许的图步数（agent/tools 往返）。太小会让多步任务中途失败，
+# 太大则可能让工具循环消耗大量 token。
+RECURSION_LIMIT = 60
 
 # 文件读取的安全上限
 # 允许分页读取较大的文本文件；单次返回仍受 max_chars 限制。
@@ -1098,8 +1104,12 @@ def _run_chat_loop_inner(
         try:
             result = graph.invoke(
                 {"messages": messages},
-                config={"recursion_limit": 25},
+                config={"recursion_limit": RECURSION_LIMIT},
             )
+        except GraphRecursionError:
+            messages.pop()
+            output("[错误] 任务步骤过多，已停止。请把任务拆成更小的步骤后重试。")
+            continue
         except KeyboardInterrupt:
             messages.pop()
             output("\n[已中断本次请求]")

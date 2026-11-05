@@ -7,7 +7,7 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from graph_agent import build_graph
+from graph_agent import RECURSION_LIMIT, build_graph
 from subagent_store import SubagentStore, now_iso
 
 SUBAGENT_SYSTEM_PROMPT = (
@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
                     HumanMessage(content=record.task),
                 ]
             },
-            config={"recursion_limit": 25},
+            config={"recursion_limit": RECURSION_LIMIT},
         )
         messages = [
             message

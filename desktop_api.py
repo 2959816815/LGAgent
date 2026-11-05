@@ -20,7 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from graph_agent import SYSTEM_PROMPT, build_graph, build_llm, collect_tools
+from graph_agent import RECURSION_LIMIT, SYSTEM_PROMPT, build_graph, build_llm, collect_tools
+from langgraph.errors import GraphRecursionError
 from context_builder import (
     ContextBudgetError,
     SummaryError,
@@ -459,7 +460,7 @@ def create_app(
             final_messages = view
             for mode, payload in graph.stream(
                 {"messages": view},
-                config={"recursion_limit": 25},
+                config={"recursion_limit": RECURSION_LIMIT},
                 stream_mode=["messages", "updates", "values"],
             ):
                 if run.cancel.is_set():
@@ -550,6 +551,19 @@ def create_app(
                 return
             session.messages.extend(dehydrate_messages(new_messages, attachment_store))
             store.save(session)
+        except GraphRecursionError:
+            emit(
+                run,
+                "error",
+                {
+                    "run_id": run.run_id,
+                    "code": "recursion_limit",
+                    "message": (
+                        f"任务超过 {RECURSION_LIMIT} 步仍未完成，已自动停止。"
+                        "请把任务拆成更小的步骤，或直接说明下一步要做什么。"
+                    ),
+                },
+            )
         except Exception as exc:
             emit(run, "error", {"run_id": run.run_id, "code": "run_error", "message": str(exc)})
         finally:
