@@ -25,6 +25,10 @@ release/
 rebuild.log
 data/
 
+# 本机 MCP 配置（含本机绝对路径，不发布）
+mcp_servers.json
+mcp_servers.json.bak
+
 # 打包输出与本地构建残留
 release-final/
 release-portable/
